@@ -1,0 +1,56 @@
+# Standard build/cache/IDE
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+build/
+dist/
+node_modules/
+*.log
+
+# Runtime output — never ship
+logs/
+reports/stability_report_*
+**/runtime/
+**/output/
+
+# === Cruft prevention (per STRUCTURE.md, non-optional) ===
+internal-planning/
+productization-plan/
+.vscode/
+.idea/
+.obsidian/
+.wrangler/
+archive/
+legacy/
+tools/
+pre-publish-grep.ps1
+pre-publish-grep.sh
+audit-fix.ps1
+audit-fix.sh
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local env
+.env
+.env.local
+.env.*
+
+# OS
+
+# Large vendored / downloaded binaries — fetched by scripts/setup.* on first install
+weights/*.onnx
+weights/*.pt
+whitebox_tools/
+release_build/
+
+# Test coverage output (regenerable)
+coverage_report.txt
+.coverage
+htmlcov/

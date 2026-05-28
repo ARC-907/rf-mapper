@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - "**.py"
+      - "build_full.bat"
+      - "build_light.bat"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - ".github/workflows/ci-build.yml"
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest tests/test_entrypoint.py tests/core/test_main.py tests/test_build_scripts.py tests/test_build.py -q
+      - name: Import smoke test
+        run: python -c "import sim_rf_map; print(sim_rf_map.__version__)"

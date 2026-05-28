@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements-runtime.txt ./
+RUN pip install --no-cache-dir -r requirements-runtime.txt
+COPY src ./src
+ARG MODEL=model_small.onnx
+COPY ${MODEL} /opt/onyx/${MODEL}
+ENV ONYX_MODEL_PATH=/opt/onyx/${MODEL}
+RUN echo 'b0a5…f977  /opt/onyx/'${MODEL} | sha256sum -c -
+CMD ["python", "-m", "sim_rf_map.main"]

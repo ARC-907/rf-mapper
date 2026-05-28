@@ -1,0 +1,51 @@
+
+[project]
+name = "rf-mapper"
+version = "0.10.0"
+description = "Desktop RF propagation and terrain-analysis mapper for offline GIS workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "RF Mapper contributors"}]
+dependencies = [
+    "numpy>=1.25,<2",
+    "matplotlib>=3.8",
+    "Pillow>=10",
+    "rasterio>=1.4",
+    "onnxruntime>=1.17",
+    "scikit-image>=0.22",
+    "opencv-python>=4.9",
+    "numba>=0.59",
+    "psutil>=5.9.0",
+    "itur>=0.3",
+    "whitebox>=2.3",
+]
+
+[project.optional-dependencies]
+dev = ["coverage>=7", "pytest>=8", "pytest-asyncio", "ruff>=0.3", "pip-tools"]
+build = ["coverage>=7", "pyinstaller>=6", "pytest>=8"]
+setup = ["colorama>=0.4.6", "python-dotenv>=1"]
+3d = ["pyqtgraph>=0.13", "PySide6>=6.5"]
+
+[project.scripts]
+sim-rf-map = "sim_rf_map.__main__:main"
+rf-mapper = "sim_rf_map.__main__:main"
+
+[tool.setuptools.package-data]
+sim_rf_map = ["**/*.json", "**/*.js", "**/*.html", "**/*.css", "**/*.png", "**/*.gif", "**/*.ico", "model_small.onnx"]
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+ignore = ["E402", "F401", "D100", "D101", "F821", "F811", "E401"]

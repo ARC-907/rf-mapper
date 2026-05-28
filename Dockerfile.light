@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements-runtime.txt ./
+RUN pip install --no-cache-dir -r requirements-runtime.txt
+COPY src ./src
+CMD ["python", "-m", "sim_rf_map.main", "--model-path", "/data/model_small.onnx"]

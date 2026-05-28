@@ -1,0 +1,16 @@
+name: Weight Hash
+
+on:
+  push:
+    paths: ["model_small.onnx"]
+  pull_request:
+    paths: ["model_small.onnx"]
+
+jobs:
+  sha256:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify model checksum
+        run: |
+          echo 'b0a5…f977  model_small.onnx' | sha256sum -c -
