@@ -48,4 +48,17 @@ build-backend = "setuptools.build_meta"
 line-length = 88
 
 [tool.ruff.lint]
-ignore = ["E402", "F401", "D100", "D101", "F821", "F811", "E401"]
+ignore = ["E402", "F401", "D100", "D101", "F811", "E401"]
+
+# F821 (undefined name) is enforced globally, with two scoped exceptions:
+#  * gui/main_window.py — large legacy GUI module references ~55 names from
+#    sibling modules (rf_desktop_app.gui, depth_physics) that are not yet
+#    imported into this file. These are real runtime-dead branches that need
+#    surfacing in a dedicated refactor pass, tracked separately. Until that
+#    refactor lands, ignore F821 here so the global rule stays useful for new code.
+#  * rf_desktop_app/gui.py — string-form forward type annotation
+#    `"matplotlib.colors.Colormap"` triggers F821 because `matplotlib` is not
+#    imported at module level (only `matplotlib.pyplot as plt`). False positive.
+[tool.ruff.lint.per-file-ignores]
+"src/sim_rf_map/gui/main_window.py" = ["F821"]
+"src/sim_rf_map/rf_desktop_app/gui.py" = ["F821"]
