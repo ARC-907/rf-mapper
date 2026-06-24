@@ -1,7 +1,7 @@
 # Runtime dependencies only
 numpy>=1.25,<2
 matplotlib>=3.8
-Pillow>=10
+Pillow>=11.3.0,<12
 rasterio>=1.4
 onnxruntime>=1.17; sys_platform != "emscripten" and platform_machine != "wasm32"
 scikit-image>=0.22
