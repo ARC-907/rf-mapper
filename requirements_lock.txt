@@ -1409,9 +1409,9 @@ pluggy==1.6.0 \
     --hash=sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3 \
     --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
     # via pytest
-prefect==2.20.2 \
-    --hash=sha256:051cdb20e62654cd9c03a4fc51f601b4080a35bc0be5cf9f2b99dfec1bbf4aff \
-    --hash=sha256:7e65d36c58649977474db29bf91ecf2c79925bcbf5256288886c1ab86a67be4f
+prefect==3.6.28.dev2 \
+    --hash=sha256:6e7bbb610c4d5eeceded7a2734eabaae2a30fd4192b302120832667323f6dd22 \
+    --hash=sha256:b1e9fbbbfaec483b39d10fea8ace2a6d994d325e02fa1135f3a5f352bbf273fb
     # via -r OnyxGeoImage-main/requirements.txt
 protobuf==6.33.6 \
     --hash=sha256:0cd27b587afca21b7cfa59a74dcbd48a50f0a6400cfb59391340ad729d91d326 \
