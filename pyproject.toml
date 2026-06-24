@@ -9,7 +9,7 @@ authors = [{name = "RF Mapper contributors"}]
 dependencies = [
     "numpy>=1.25,<2",
     "matplotlib>=3.8",
-    "Pillow>=11.3.0,<12",
+    "Pillow>=11.3.0,<13",
     "rasterio>=1.4",
     "onnxruntime>=1.17",
     "scikit-image>=0.22",
