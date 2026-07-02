@@ -25,15 +25,28 @@ DEFAULT_MODEL = Path(
     )
 )
 
-if not DEFAULT_MODEL.exists():
-    raise FileNotFoundError(
-        f"ONNX model not found at {DEFAULT_MODEL}. Set ONYX_MODEL_PATH or place model in /weights folder."
-    )
-
 
 def _default_model_path() -> str:
-    """Return absolute path to bundled ONNX model."""
+    """Return absolute path to the configured ONNX model (may not exist)."""
     return str(DEFAULT_MODEL)
+
+
+def model_available() -> bool:
+    """Return True when both onnxruntime and the model file are present."""
+    return ort is not None and DEFAULT_MODEL.exists()
+
+
+def missing_model_message() -> str:
+    """Human-readable explanation of what is missing and how to enable depth."""
+    if ort is None:
+        return (
+            "Depth inference is unavailable: onnxruntime is not installed. "
+            "Install it with `pip install onnxruntime`."
+        )
+    return (
+        f"Depth inference is unavailable: ONNX model not found at {DEFAULT_MODEL}. "
+        "Set ONYX_MODEL_PATH or place model_small.onnx in the weights/ folder."
+    )
 
 
 MODEL_PATH = _default_model_path()
@@ -49,9 +62,9 @@ def load_model(path: str | Path | None = None):
         return _session
     if path is None:
         path = DEFAULT_MODEL
-        _session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
-    else:
-        _session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    if not Path(path).exists():
+        raise FileNotFoundError(missing_model_message())
+    _session = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
     return _session
 
 
