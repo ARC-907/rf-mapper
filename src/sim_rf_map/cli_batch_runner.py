@@ -1,25 +1,32 @@
-"""Batch CLI for RF analysis."""
+"""Batch CLI for RF analysis.
+
+Transmitters come from ``--tx tx.json`` (a JSON list of objects with
+``x``/``y`` pixel coordinates and optional ``z``, ``frequency_mhz``,
+``power_dbm``), from the single-transmitter ``--tx-x/--tx-y`` flags, or
+default to the DEM center with a warning.
+"""
 
 import argparse
+import json
 import logging
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 
 from sim_rf_map.logging_config import configure_logging
 from sim_rf_map.startup_manager import (
-    load_resource, log_startup_diagnostic, save_startup_report, 
+    load_resource, log_startup_diagnostic, save_startup_report,
     register_optional_component
 )
 from sim_rf_map.config_validator import (
-    load_config_with_validation, validate_float_range,
+    load_config_with_validation, save_config, validate_float_range,
     validate_string_choice
 )
 from sim_rf_map.crash_recovery import (
-    CrashHandler, create_crash_dump
+    CrashHandler, create_crash_dump, safe_call
 )
 
 # Configure logging system
@@ -61,13 +68,57 @@ class ValidationResult(tuple):
         return bool(self.is_valid)
 
 
-class _BasicPropagator:
-    def compute_coverage(self, dem: np.ndarray, _tx_points: list, _settings: Dict[str, Any]) -> np.ndarray:
-        return np.zeros_like(dem, dtype=float)
+class _CoveragePropagator:
+    """Real coverage propagator over a 2D DEM grid.
+
+    Delegates to the shared propagation stack (the same math the GUI uses)
+    and returns received power in dBm per cell.
+    """
+
+    def __init__(self, high_physics: bool = False, resolution_m: float = 30.0):
+        self.high_physics = high_physics
+        self.resolution_m = resolution_m
+
+    def compute_coverage(
+        self, dem: np.ndarray, tx_points: list, settings: Dict[str, Any]
+    ) -> np.ndarray:
+        from sim_rf_map.propagation.high_physics import (
+            simulate_basic_rf,
+            simulate_high_physics_rf,
+        )
+
+        frequency = float(settings.get("frequency", 900.0) or 900.0)
+        tx_list = []
+        for tx in tx_points:
+            entry = {
+                "x": int(tx.get("x", tx.get("lon", dem.shape[1] // 2)) or 0),
+                "y": int(tx.get("y", tx.get("lat", dem.shape[0] // 2)) or 0),
+                "frequency_mhz": float(tx.get("frequency_mhz", frequency)),
+                "power_dbm": float(tx.get("power", tx.get("power_dbm", 30.0)) or 30.0),
+            }
+            entry["x"] = int(np.clip(entry["x"], 0, dem.shape[1] - 1))
+            entry["y"] = int(np.clip(entry["y"], 0, dem.shape[0] - 1))
+            tx_list.append(entry)
+        if not tx_list:
+            tx_list = [{
+                "x": dem.shape[1] // 2,
+                "y": dem.shape[0] // 2,
+                "frequency_mhz": frequency,
+                "power_dbm": 30.0,
+            }]
+
+        simulate = simulate_high_physics_rf if self.high_physics else simulate_basic_rf
+        net_loss = simulate(dem, tx_list, resolution_m=self.resolution_m)
+        # net loss is (path loss - tx power); received power is its negation.
+        return -np.asarray(net_loss, dtype=float)
 
 
-def get_propagator(_settings: Optional[Dict[str, Any]] = None) -> _BasicPropagator:
-    return _BasicPropagator()
+def get_propagator(settings: Optional[Dict[str, Any]] = None) -> _CoveragePropagator:
+    settings = settings or {}
+    return _CoveragePropagator(
+        high_physics=bool(settings.get("high_physics", False)),
+        resolution_m=float(settings.get("resolution", 30.0) or 30.0),
+    )
 
 
 def _unpack_validation_result(result: Any) -> Tuple[bool, list]:
@@ -128,6 +179,56 @@ def load_dem_image(path: Path) -> np.ndarray:
     except Exception as e:
         log_startup_diagnostic("dem_loading", "error", f"Failed to load DEM image: {str(e)}")
         raise
+
+
+def load_tx_config(path: Path, dem_shape: Tuple[int, int]) -> List[Dict[str, Any]]:
+    """Load and validate a transmitter list from a JSON file.
+
+    Expected format: a JSON array of objects, each with integer ``x`` and
+    ``y`` pixel coordinates inside the DEM, and optional ``z`` (voxel
+    layer, default 1), ``frequency_mhz`` and ``power_dbm``.
+
+    Raises:
+        ValueError: on malformed structure or out-of-bounds coordinates.
+    """
+    log_startup_diagnostic("tx_config", "info", f"Loading transmitter config from: {path}")
+    if not path.exists():
+        raise FileNotFoundError(f"Transmitter config not found: {path}")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    if isinstance(data, dict) and "transmitters" in data:
+        data = data["transmitters"]
+    if not isinstance(data, list) or not data:
+        raise ValueError(
+            f"Transmitter config must be a non-empty JSON list, got {type(data).__name__}"
+        )
+
+    rows, cols = dem_shape
+    tx_list: List[Dict[str, Any]] = []
+    for index, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Transmitter #{index} must be an object, got {type(entry).__name__}")
+        if "x" not in entry or "y" not in entry:
+            raise ValueError(f"Transmitter #{index} is missing required 'x'/'y' pixel coordinates")
+        x, y = int(entry["x"]), int(entry["y"])
+        if not (0 <= x < cols and 0 <= y < rows):
+            raise ValueError(
+                f"Transmitter #{index} at ({x}, {y}) is outside the DEM grid {cols}x{rows}"
+            )
+        tx_list.append({
+            "x": x,
+            "y": y,
+            # None means "place on the terrain surface" (resolved after
+            # voxelization).
+            "z": int(entry["z"]) if "z" in entry else None,
+            "frequency_mhz": float(entry.get("frequency_mhz", 900.0)),
+            "power_dbm": float(entry.get("power_dbm", 30.0)),
+        })
+
+    log_startup_diagnostic("tx_config", "success", f"Loaded {len(tx_list)} transmitter(s)")
+    return tx_list
 
 
 def validate_cli_args(args: argparse.Namespace) -> ValidationResult:
@@ -247,11 +348,29 @@ def main() -> int:
         # Parse command line arguments
         parser = argparse.ArgumentParser(description="Batch RF Propagation CLI")
         parser.add_argument("--input", "--dem", dest="input", required=True, help="Path to DEM image (grayscale)")
-        parser.add_argument("--frequency", type=float, default=DEFAULT_CONFIG["simulation"]["default_frequency_mhz"], 
+        parser.add_argument("--frequency", type=float, default=DEFAULT_CONFIG["simulation"]["default_frequency_mhz"],
                           help="Frequency MHz")
-        parser.add_argument("--output", default=DEFAULT_CONFIG["output"]["default_output_dir"], 
+        parser.add_argument("--output", default=DEFAULT_CONFIG["output"]["default_output_dir"],
                           help="Output directory")
         parser.add_argument("--config", help="Path to configuration file")
+        parser.add_argument("--save-config", dest="save_config", default=None,
+                          help="Write the effective configuration to this path and continue")
+        parser.add_argument("--tx", dest="tx",
+                          help=("Path to a JSON file with a list of transmitters, each an "
+                                "object with x, y (pixel coords) and optional z, "
+                                "frequency_mhz, power_dbm"))
+        parser.add_argument("--tx-x", dest="tx_x", type=int, default=None,
+                          help="Single-transmitter pixel column (used when --tx is absent)")
+        parser.add_argument("--tx-y", dest="tx_y", type=int, default=None,
+                          help="Single-transmitter pixel row (used when --tx is absent)")
+        parser.add_argument("--tx-z", dest="tx_z", type=int, default=None,
+                          help="Single-transmitter voxel layer height (default: terrain surface + 2)")
+        parser.add_argument("--tx-power", dest="tx_power", type=float, default=30.0,
+                          help="Single-transmitter power in dBm (default 30)")
+        parser.add_argument("--resolution", type=float, default=30.0,
+                          help="Ground size of one pixel in meters (default 30)")
+        parser.add_argument("--high-physics", dest="high_physics", action="store_true",
+                          help="Use the high-physics propagation stack")
         parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
         # Add weather attenuation options
@@ -343,10 +462,17 @@ def main() -> int:
         # Load DEM image
         dem = load_resource("dem_image", load_dem_image, Path(args.input))
 
-        # Progressive resource loading with diagnostics
+        # Progressive resource loading with diagnostics. Image-derived DEMs
+        # carry raw pixel intensities (0..255), which would saturate the
+        # 50-layer voxel grid solid; normalize terrain into the lower part
+        # of the voxel height range first.
         with CrashHandler(component="voxelization"):
             log_startup_diagnostic("voxelization", "info", "Voxelizing DEM")
-            voxels = load_resource("voxels", voxelize_dem, dem)
+            if dem.max() > 0:
+                voxel_dem = dem / dem.max() * 30.0
+            else:
+                voxel_dem = dem
+            voxels = load_resource("voxels", voxelize_dem, voxel_dem)
             log_startup_diagnostic("voxelization", "success", f"Voxel volume created with shape: {voxels.shape}")
 
         with CrashHandler(component="material_classification"):
@@ -373,9 +499,50 @@ def main() -> int:
             permeability = None
             register_optional_component("permeability", False)
 
-        # Set up origin point
-        origin = (int(1.65), dem.shape[0] // 2, dem.shape[1] // 2)
-        log_startup_diagnostic("origin", "success", f"Using origin point: {origin}")
+        # Persist the effective configuration when requested.
+        if getattr(args, "save_config", None):
+            save_config(config, Path(args.save_config))
+            log_startup_diagnostic(
+                "save_config", "success", f"Configuration written to {args.save_config}"
+            )
+
+        # Determine transmitters: --tx JSON file, --tx-x/--tx-y flags, or
+        # DEM-center default (with a warning so the fallback is visible).
+        if getattr(args, "tx", None):
+            tx_list = load_tx_config(Path(args.tx), dem.shape)
+        elif getattr(args, "tx_x", None) is not None and getattr(args, "tx_y", None) is not None:
+            tx_list = [{
+                "x": int(np.clip(args.tx_x, 0, dem.shape[1] - 1)),
+                "y": int(np.clip(args.tx_y, 0, dem.shape[0] - 1)),
+                "z": int(args.tx_z) if args.tx_z is not None else None,
+                "frequency_mhz": float(args.frequency),
+                "power_dbm": float(args.tx_power),
+            }]
+        else:
+            logging.warning(
+                "No transmitter specified (--tx or --tx-x/--tx-y); defaulting to DEM center."
+            )
+            tx_list = [{
+                "x": dem.shape[1] // 2,
+                "y": dem.shape[0] // 2,
+                "z": None,
+                "frequency_mhz": float(args.frequency),
+                "power_dbm": 30.0,
+            }]
+
+        # Resolve surface-relative transmitter heights: place antennas two
+        # voxel layers above the local terrain unless a z was given.
+        depth = voxels.shape[0]
+        for tx in tx_list:
+            if tx["z"] is None:
+                surface = int(voxel_dem[tx["y"], tx["x"]])
+                tx["z"] = int(np.clip(surface + 2, 0, depth - 1))
+
+        origin = (tx_list[0]["z"], tx_list[0]["y"], tx_list[0]["x"])
+        log_startup_diagnostic(
+            "origin", "success",
+            f"Using {len(tx_list)} transmitter(s); first origin: {origin}"
+        )
 
         # Initialize weather conditions
         with CrashHandler(component="weather"):
@@ -418,21 +585,36 @@ def main() -> int:
                     f"Expected weather attenuation: {weather_attenuation:.2f} dB"
                 )
 
-        # Propagate wavefront
+        # Propagate wavefront (single transmitter) or aggregate several.
         with CrashHandler(component="propagation"):
             log_startup_diagnostic("propagation", "info", f"Propagating wavefront at {args.frequency}MHz")
 
-            loss_map = propagate_wavefront(
-                voxels=voxels,
-                materials=materials,
-                permeability=permeability,
-                origin=origin,
-                frequency_mhz=args.frequency,
-                weather=weather,
-                polarization=args.polarization,
-            )
+            if len(tx_list) > 1:
+                from sim_rf_map.multi_tx_propagator import aggregate_multi_tx
+
+                loss_map = aggregate_multi_tx(
+                    voxels=voxels,
+                    materials=materials,
+                    permeability=permeability,
+                    tx_list=tx_list,
+                    weather=weather,
+                )
+            else:
+                loss_map = propagate_wavefront(
+                    voxels=voxels,
+                    materials=materials,
+                    permeability=permeability,
+                    origin=origin,
+                    frequency_mhz=tx_list[0]["frequency_mhz"],
+                    weather=weather,
+                    polarization=args.polarization,
+                )
 
             log_startup_diagnostic("propagation", "success", f"Loss map generated with shape: {loss_map.shape}")
+
+        # Unreached voxels are +inf; clamp to the loss ceiling so exports
+        # (image normalization, npy consumers) stay finite.
+        loss_map = np.where(np.isfinite(loss_map), loss_map, 120.0).astype("float32")
 
         # Export results
         with CrashHandler(component="export"):
