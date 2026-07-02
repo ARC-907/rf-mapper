@@ -1,6 +1,6 @@
-# OnyxGeoImage Common Workflows
+# RF Mapper Common Workflows
 
-This document provides step-by-step guides for common workflows in OnyxGeoImage.
+This document provides step-by-step guides for common workflows in RF Mapper.
 
 ## Table of Contents
 
@@ -17,7 +17,7 @@ This workflow covers the basic process of loading an image, setting transmitter 
 
 ### Step 1: Load an Image
 
-1. Launch OnyxGeoImage
+1. Launch RF Mapper
 2. Click the "Open" button in the toolbar or use the keyboard shortcut Ctrl+O
 3. Select a terrain image file (PNG, JPG, or TIFF format)
 4. The image will be loaded and displayed in the main window

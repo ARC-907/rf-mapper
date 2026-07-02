@@ -1,6 +1,6 @@
 # Build System Documentation
 
-This document provides comprehensive information about the build system for the OnyxGeoImage project, including setup procedures, build processes, troubleshooting guides, and verification steps.
+This document provides comprehensive information about the build system for the RF Mapper project, including setup procedures, build processes, troubleshooting guides, and verification steps.
 
 ## Table of Contents
 1. [Build Environment Requirements](#build-environment-requirements)
@@ -33,8 +33,8 @@ The following environment variables should be set:
 ### Initial Setup
 1. Clone the repository:
    ```
-   git clone https://github.com/your-organization/OnyxGeoImage.git
-   cd OnyxGeoImage
+   git clone https://github.com/ARC-907/rf-mapper.git
+   cd rf-mapper
    ```
 
 2. Create and activate a virtual environment:
@@ -195,7 +195,7 @@ The project includes automated verification tests in `tests\test_build_scripts.p
 **Solution**:
 1. Ensure you're running the build script from the project root directory
 2. Verify that the spec file exists (`light.spec` or `full.spec`)
-3. If missing, recreate the spec file: `pyinstaller --name=onyx_geo_image src\main.py`
+3. If missing, recreate the spec file: `pyinstaller --name=rf-mapper src\main.py`
 
 #### Build Produces No Artifacts
 **Issue**: Build completes but no executable is created.
@@ -213,7 +213,7 @@ The project includes automated verification tests in `tests\test_build_scripts.p
 1. Run the executable from the command line to see error messages
 2. Check if all required DLLs are included in the distribution
 3. Verify that all dependencies are correctly specified in the spec file
-4. Try running with the `--debug` flag: `onyx_geo_image.exe --debug`
+4. Try running with the `--debug` flag: `rf-mapper.exe --debug`
 
 #### Out of Memory During Build
 **Issue**: Build process runs out of memory.

@@ -1,5 +1,5 @@
 @echo off
-echo ===== OnyxGeoImage Launcher =====
+echo ===== RF Mapper Launcher =====
 echo.
 
 REM Set PYTHONPATH to include the src directory

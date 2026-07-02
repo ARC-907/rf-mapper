@@ -1,5 +1,5 @@
 @echo off
-echo ===== OnyxGeoImage Development Environment Setup and Launch =====
+echo ===== RF Mapper Development Environment Setup and Launch =====
 echo.
 
 REM Check if Python is installed
@@ -61,7 +61,7 @@ REM Launch options menu
 :menu
 cls
 echo.
-echo ===== OnyxGeoImage Launch Options =====
+echo ===== RF Mapper Launch Options =====
 echo.
 echo 1. Launch GUI (Standard)
 echo 2. Launch GUI (Lite Version)

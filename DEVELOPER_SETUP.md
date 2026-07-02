@@ -13,6 +13,16 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
+The `dev` extra includes the full-mode dependency stack so the complete
+test suite can run. For a minimal Lite-only install use `pip install -e .`;
+for the full-mode runtime stack alone use `pip install -e ".[full]"`.
+
+Verify the environment at any time:
+
+```powershell
+rf-mapper-doctor
+```
+
 For optional setup helper scripts, install the setup extra:
 
 ```powershell
@@ -48,7 +58,10 @@ python -m sim_rf_map.main --mode=lite
 
 ## Runtime Modes
 
-`full` is the default mode. `lite` can be selected through `--mode=lite` or `ONYX_MODE=lite`.
+`full` is the default mode and launches the complete desktop window.
+`lite` launches the reduced field window (fast free-space + line-of-sight
+analysis, minimal controls) and can be selected through `--mode=lite` or
+`ONYX_MODE=lite`.
 
 ```powershell
 $env:ONYX_MODE = "lite"

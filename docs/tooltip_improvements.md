@@ -1,7 +1,7 @@
 # Tooltip System Improvements
 
 ## Overview
-This document describes the improvements made to the tooltip system in the OnyxGeoImage application to enhance user guidance and provide more thorough explanations of features.
+This document describes the improvements made to the tooltip system in the RF Mapper application to enhance user guidance and provide more thorough explanations of features.
 
 ## Changes Made
 

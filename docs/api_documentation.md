@@ -1,6 +1,6 @@
-# OnyxGeoImage API Documentation
+# RF Mapper API Documentation
 
-This document provides comprehensive documentation for the OnyxGeoImage API, including classes, methods, and functions.
+This document provides comprehensive documentation for the RF Mapper API, including classes, methods, and functions.
 
 ## Table of Contents
 
