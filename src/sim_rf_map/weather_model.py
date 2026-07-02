@@ -109,7 +109,45 @@ class WeatherConditions:
         """
         return self.cloud_type_map.get(self.cloud_cover_level)
 
-    def apply_weather_attenuation(self, path_loss: float, freq_GHz: float, 
+    def specific_attenuation_db_per_km(
+        self, freq_GHz: float, polarization: str = "vertical"
+    ) -> float:
+        """Total weather specific attenuation in dB/km for these conditions.
+
+        Combines ITU-R P.840 cloud and P.838 rain specific attenuations;
+        multiply by the actual traversed distance (in km) to get the loss
+        contribution over a path segment.
+        """
+        from sim_rf_map.physics.weather_attenuation import (
+            calculate_cloud_attenuation,
+            calculate_rain_attenuation,
+        )
+
+        pol = (
+            Polarization.HORIZONTAL
+            if polarization.lower() == "horizontal"
+            else Polarization.VERTICAL
+        )
+        env_params = EnvParams(
+            freq_GHz=freq_GHz,
+            pol=pol,
+            temperature=self.temperature_c,
+            pressure=self.pressure_hpa,
+            rel_humidity=self.humidity_percent,
+        )
+
+        total = 0.0
+        cloud_type = self.get_cloud_type()
+        if cloud_type is not None:
+            lwc = {"light": 0.05, "medium": 0.25, "heavy": 0.5}.get(cloud_type, 0.0)
+            total += calculate_cloud_attenuation(freq_GHz, lwc, 1.0)
+        rain_type = self.get_rain_type()
+        if rain_type is not None:
+            rain_rate = {"light": 2.0, "medium": 10.0, "heavy": 50.0}.get(rain_type, 0.0)
+            total += calculate_rain_attenuation(rain_rate, 1.0, env_params)
+        return total
+
+    def apply_weather_attenuation(self, path_loss: float, freq_GHz: float,
                                  polarization: str = "vertical") -> float:
         """
         Apply weather attenuation to path loss using ITU models.

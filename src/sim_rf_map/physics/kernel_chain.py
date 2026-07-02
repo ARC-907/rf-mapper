@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Dict, List, Optional, Callable, Any, Union
 
-from sim_rf_map.physics.constants import EnvParams, Polarization
+from sim_rf_map.physics.constants import EnvParams, Polarization, SPEED_OF_LIGHT
 
 
 class PhysicsKernel:
@@ -77,9 +77,10 @@ class FreeSpaceKernel(PhysicsKernel):
         Returns:
             Updated path loss in dB
         """
-        # ITU-R P.525-4 formula
-        fspl = 32.44 + 20 * np.log10(distance_km) + 20 * np.log10(freq_GHz * 1000)  # Convert GHz to MHz
-        return path_loss + fspl
+        from sim_rf_map.rf.propagation import fspl_db_km_mhz
+
+        # Canonical ITU-R P.525-4 implementation (no rounding-constant drift).
+        return path_loss + fspl_db_km_mhz(distance_km, freq_GHz * 1000.0)
 
 
 class GaseousKernel(PhysicsKernel):
@@ -138,19 +139,27 @@ class RefractionKernel(PhysicsKernel):
             Updated path loss in dB
         """
         from sim_rf_map.physics.refraction import calculate_effective_earth_radius_factor
-        
-        # Calculate effective Earth radius factor
+        from sim_rf_map.knife_edge import fresnel_nu, knife_edge_loss_nu
+
+        # Calculate effective Earth radius factor from the actual atmosphere.
         k = calculate_effective_earth_radius_factor(
             temperature=env_params.temperature,
             pressure=env_params.pressure,
             rel_humidity=env_params.rel_humidity
         )
-        
-        # Adjust path loss based on refraction (simplified model)
-        # In a real implementation, this would apply the full refraction model to the terrain profile
-        refraction_factor = 1.0 - 0.1 * (k - 4/3)  # Adjust loss based on deviation from standard k=4/3
-        
-        return path_loss * refraction_factor
+
+        # Smooth-earth obstruction: the effective-earth bulge at mid-path acts
+        # as a virtual knife edge relative to the antenna line of sight.
+        h_tx = float(kwargs.get("h_tx", 10.0))
+        h_rx = float(kwargs.get("h_rx", 1.5))
+        d_m = distance_km * 1000.0
+        if d_m <= 0:
+            return path_loss
+        wavelength = 299_792_458.0 / (env_params.freq_GHz * 1e9)
+        bulge_m = d_m**2 / (8.0 * k * 6_371_000.0)
+        h_obstruction = bulge_m - (h_tx + h_rx) / 2.0
+        v = fresnel_nu(h_obstruction, d_m / 2.0, d_m / 2.0, wavelength)
+        return path_loss + knife_edge_loss_nu(v)
 
 
 class DiffractionKernel(PhysicsKernel):
@@ -187,24 +196,35 @@ class ReflectionKernel(PhysicsKernel):
         """Initialize the reflection kernel."""
         super().__init__("reflection", enabled)
     
-    def _apply(self, path_loss: float, dem: np.ndarray, tx_pos_list: list[dict], 
-              env_params: EnvParams, *args, **kwargs) -> float:
+    def _apply(self, path_loss: float, distance_km: float = None,
+              env_params: EnvParams = None, *args, **kwargs) -> float:
         """
-        Apply reflection effects.
-        
-        Args:
-            path_loss: Current path loss in dB
-            dem: Digital elevation model
-            tx_pos_list: List of transmitter positions
-            env_params: Environmental parameters
-            
-        Returns:
-            Updated path loss in dB
+        Apply flat-earth two-ray ground-bounce reflection to a path.
+
+        Uses the antenna heights (``h_tx``/``h_rx`` kwargs, defaults 10 m and
+        1.5 m) and the ground parameters in ``env_params``. No-op when the
+        path is inside the near-field of the two-ray approximation.
         """
-        # This is a simplified approach - in a real implementation,
-        # you would apply the reflection model to the specific path
-        # For now, we'll just return the path loss unchanged
-        return path_loss
+        if distance_km is None or env_params is None:
+            return path_loss
+
+        import cmath
+        from sim_rf_map.physics.reflection import calculate_reflection_coefficient
+
+        h_tx = float(kwargs.get("h_tx", 10.0))
+        h_rx = float(kwargs.get("h_rx", 1.5))
+        d_m = distance_km * 1000.0
+        if d_m <= 5.0 * (h_tx + h_rx):
+            return path_loss
+
+        wavelength = 299_792_458.0 / (env_params.freq_GHz * 1e9)
+        path_diff = 2.0 * h_tx * h_rx / d_m
+        sin_psi = min((h_tx + h_rx) / d_m, 1.0)
+        gamma = calculate_reflection_coefficient(sin_psi, env_params)
+        phase = 2.0 * np.pi * path_diff / wavelength
+        rel_field = abs(1.0 + gamma * cmath.exp(1j * phase))
+        delta = -20.0 * np.log10(max(rel_field, 1e-6))
+        return path_loss + float(np.clip(delta, -10.0, 10.0))
 
 
 class FresnelKernel(PhysicsKernel):
@@ -268,19 +288,12 @@ class InterferenceKernel(PhysicsKernel):
         Returns:
             Updated path loss in dB
         """
-        from sim_rf_map.physics.interference import compute_interference
-        
-        # Compute interference
-        if self.show_pattern and phase_volumes is not None:
-            # Use complex field summation with phase information
-            interference = compute_interference(volumes, phase_volumes, env_params)
-        else:
-            # Use standard interference model without phase information
-            interference = compute_interference(volumes)
-        
-        # This is a simplified approach - in a real implementation,
-        # you would apply the interference model to the specific path
-        # For now, we'll just return the path loss unchanged
+        # Inter-transmitter interference is a grid-level effect: it is
+        # applied when per-transmitter loss maps are combined (see
+        # physics.interference.combine_loss_maps and
+        # multi_tx_interference_delta_db), not per scalar path. This kernel
+        # intentionally leaves single-path loss unchanged.
+        _ = volumes, phase_volumes, env_params
         return path_loss
 
 
@@ -421,9 +434,18 @@ class KernelChain:
 
 
 class PhysicsKernelChain:
-    """Compatibility facade for grid-based physics-chain tests."""
+    """Grid-based physics chain: per-cell loss surfaces with a component
+    breakdown.
 
-    def __init__(self) -> None:
+    Every enabled component delegates to the real physics modules (canonical
+    FSPL, smooth-earth refraction loss, terrain knife-edge diffraction,
+    two-ray reflection, Fresnel clearance penalty, phase-based
+    inter-transmitter interference, ITU rain/cloud attenuation). Pixel
+    distances are converted through ``resolution_m`` (default 1 m/pixel).
+    """
+
+    def __init__(self, resolution_m: float = 1.0,
+                 tx_height_m: float = 10.0, rx_height_m: float = 1.5) -> None:
         self.enabled_kernels: Dict[str, bool] = {
             "free_space": True,
             "refraction": False,
@@ -435,59 +457,178 @@ class PhysicsKernelChain:
         }
         self.env_params = EnvParams(freq_GHz=2.4, pol=Polarization.HORIZONTAL)
         self.weather_params: Dict[str, Any] = {}
-        self._last_breakdowns: Dict[tuple[int, int], Dict[str, float]] = {}
+        self.resolution_m = float(resolution_m)
+        self.tx_height_m = float(tx_height_m)
+        self.rx_height_m = float(rx_height_m)
+        self._component_maps: Dict[str, np.ndarray] = {}
 
     def enable_kernel(self, name: str, enabled: bool = True) -> None:
         """Enable or disable a named physics component."""
         self.enabled_kernels[name] = enabled
 
     def set_env_params(self, env_params: EnvParams) -> None:
-        """Set environmental parameters used by the compatibility processor."""
+        """Set environmental parameters used by the processor."""
         self.env_params = env_params
 
     def set_weather_params(self, weather_params: Dict[str, Any]) -> None:
-        """Set weather parameters used by the compatibility processor."""
+        """Set weather parameters used by the processor."""
         self.weather_params = dict(weather_params)
 
+    def _smooth_earth_refraction_loss(self, distance_m: np.ndarray) -> np.ndarray:
+        """Vectorized smooth-earth (bulge) diffraction loss in dB."""
+        from sim_rf_map.physics.refraction import calculate_effective_earth_radius_factor
+
+        k = calculate_effective_earth_radius_factor(
+            temperature=self.env_params.temperature,
+            pressure=self.env_params.pressure,
+            rel_humidity=self.env_params.rel_humidity,
+        )
+        wavelength = SPEED_OF_LIGHT / (self.env_params.freq_GHz * 1e9)
+        d = np.maximum(distance_m, 1e-6)
+        bulge = d**2 / (8.0 * k * 6_371_000.0)
+        h_obs = bulge - (self.tx_height_m + self.rx_height_m) / 2.0
+        # v = h * sqrt((2/lambda) * (2/(d/2))) with d1 = d2 = d/2.
+        v = h_obs * np.sqrt((2.0 / wavelength) * (4.0 / d))
+        loss = np.where(
+            v > -0.78,
+            6.9 + 20.0 * np.log10(np.sqrt((v - 0.1) ** 2 + 1.0) + v - 0.1),
+            0.0,
+        )
+        return np.maximum(loss, 0.0)
+
+    def _terrain_diffraction_map(self, dem: np.ndarray, tx: Dict[str, Any]) -> np.ndarray:
+        """Subsampled terrain knife-edge diffraction loss map in dB."""
+        from sim_rf_map.terrain_los import knife_edge_diffraction
+
+        rows, cols = dem.shape
+        tx_pos = (int(tx.get("y", 0)), int(tx.get("x", 0)))
+        freq_mhz = float(self.env_params.freq_GHz) * 1000.0
+        step = max(1, min(rows, cols) // 50)
+        diff = np.zeros((rows, cols), dtype=float)
+        for y in range(0, rows, step):
+            for x in range(0, cols, step):
+                if (y, x) == tx_pos:
+                    continue
+                diff[y, x] = knife_edge_diffraction(
+                    dem, tx_pos, (y, x), freq_mhz, scale=self.resolution_m
+                )
+        if step > 1:
+            # Nearest-neighbor fill for skipped cells.
+            ys = (np.arange(rows) // step) * step
+            xs = (np.arange(cols) // step) * step
+            diff = diff[np.clip(ys, 0, rows - 1)][:, np.clip(xs, 0, cols - 1)]
+        return diff
+
+    def _fresnel_penalty_map(self, dem: np.ndarray, tx: Dict[str, Any]) -> np.ndarray:
+        """Fresnel clearance penalty map (0..6 dB) on a subsampled grid."""
+        from sim_rf_map.terrain_los import profile_elevation
+        from sim_rf_map.physics.fresnel import (
+            calculate_fresnel_clearance,
+            apply_fresnel_clearance_loss,
+        )
+
+        rows, cols = dem.shape
+        tx_pos = (int(tx.get("y", 0)), int(tx.get("x", 0)))
+        step = max(1, min(rows, cols) // 50)
+        penalty = np.zeros((rows, cols), dtype=float)
+        for y in range(0, rows, step):
+            for x in range(0, cols, step):
+                if (y, x) == tx_pos:
+                    continue
+                dists_px, profile = profile_elevation(dem, tx_pos, (y, x))
+                if len(profile) < 3:
+                    continue
+                distances_km = dists_px * self.resolution_m / 1000.0
+                if distances_km[-1] <= 0:
+                    continue
+                clearance_ratio, _ = calculate_fresnel_clearance(
+                    profile,
+                    distances_km,
+                    self.tx_height_m,
+                    self.rx_height_m,
+                    self.env_params,
+                )
+                penalty[y, x] = apply_fresnel_clearance_loss(0.0, clearance_ratio)
+        if step > 1:
+            ys = (np.arange(rows) // step) * step
+            xs = (np.arange(cols) // step) * step
+            penalty = penalty[np.clip(ys, 0, rows - 1)][:, np.clip(xs, 0, cols - 1)]
+        return penalty
+
+    def _weather_map(self, distance_m: np.ndarray) -> np.ndarray:
+        """Distance-scaled rain/cloud attenuation map in dB."""
+        from sim_rf_map.physics.weather_attenuation import (
+            calculate_cloud_attenuation,
+            calculate_rain_attenuation,
+        )
+
+        gamma = 0.0  # dB/km
+        if self.weather_params.get("enable_rain"):
+            rain_rate = float(self.weather_params.get("rain_rate", 0.0) or 0.0)
+            if rain_rate > 0:
+                gamma += calculate_rain_attenuation(rain_rate, 1.0, self.env_params)
+        if self.weather_params.get("enable_clouds"):
+            cloud_type = str(self.weather_params.get("cloud_type", "medium")).lower()
+            lwc = {"light": 0.05, "medium": 0.25, "heavy": 0.5}.get(cloud_type, 0.0)
+            if lwc > 0:
+                gamma += calculate_cloud_attenuation(self.env_params.freq_GHz, lwc, 1.0)
+        return gamma * distance_m / 1000.0
+
     def process(self, loss_volume: np.ndarray, dem: np.ndarray, tx_list: List[Dict[str, Any]]) -> np.ndarray:
-        """Return a deterministic loss surface for one or more transmitters."""
+        """Return the combined loss surface for one or more transmitters.
+
+        Per transmitter, enabled component losses are computed with the real
+        physics modules and summed; transmitters combine strongest-signal
+        (element-wise minimum). Component maps for the winning transmitter
+        are kept for :meth:`get_loss_breakdown`.
+        """
+        from sim_rf_map.rf.propagation import free_space_path_loss_db
+        from sim_rf_map.physics.reflection import two_ray_delta_db
+        from sim_rf_map.physics.interference import multi_tx_interference_delta_db
+
         if not tx_list:
             return loss_volume.copy()
 
         y_indices, x_indices = np.indices(dem.shape)
         combined = np.full(dem.shape, np.inf, dtype=float)
         component_maps: Dict[str, np.ndarray] = {}
-        freq_MHz = max(float(self.env_params.freq_GHz) * 1000.0, 1.0)
+        freq_hz = max(float(self.env_params.freq_GHz), 1e-6) * 1e9
 
         for tx in tx_list:
             tx_x = float(tx.get("x", 0))
             tx_y = float(tx.get("y", 0))
-            distance_pixels = np.hypot(x_indices - tx_x, y_indices - tx_y)
-            distance_km = np.maximum(distance_pixels / 1000.0, 0.001)
-            free_space = 32.44 + 20.0 * np.log10(distance_km) + 20.0 * np.log10(freq_MHz)
+            distance_m = (
+                np.hypot(x_indices - tx_x, y_indices - tx_y) * self.resolution_m
+            )
+            free_space = free_space_path_loss_db(distance_m, freq_hz)
+            zeros = np.zeros_like(free_space)
             components: Dict[str, np.ndarray] = {
                 "free_space": free_space,
-                "refraction": np.zeros_like(free_space),
-                "diffraction": np.zeros_like(free_space),
-                "reflection": np.zeros_like(free_space),
-                "fresnel": np.zeros_like(free_space),
-                "interference": np.zeros_like(free_space),
-                "weather": np.zeros_like(free_space),
+                "refraction": zeros.copy(),
+                "diffraction": zeros.copy(),
+                "reflection": zeros.copy(),
+                "fresnel": zeros.copy(),
+                "interference": zeros.copy(),
+                "weather": zeros.copy(),
             }
 
             if self.enabled_kernels.get("refraction"):
-                components["refraction"] = np.full_like(free_space, 0.05)
+                components["refraction"] = self._smooth_earth_refraction_loss(distance_m)
             if self.enabled_kernels.get("diffraction"):
-                components["diffraction"] = np.maximum(dem - np.nanmin(dem), 0) * 0.005
+                components["diffraction"] = self._terrain_diffraction_map(dem, tx)
             if self.enabled_kernels.get("reflection"):
-                components["reflection"] = np.full_like(free_space, 0.1)
+                components["reflection"] = two_ray_delta_db(
+                    dem,
+                    {**tx, "frequency_mhz": self.env_params.freq_GHz * 1000.0},
+                    env_params=self.env_params,
+                    resolution_m=self.resolution_m,
+                    tx_height_m=self.tx_height_m,
+                    rx_height_m=self.rx_height_m,
+                )
             if self.enabled_kernels.get("fresnel"):
-                components["fresnel"] = np.maximum(dem - np.nanmin(dem), 0) * 0.005
-            if self.enabled_kernels.get("interference"):
-                components["interference"] = 0.25 * np.sin(distance_pixels / 8.0)
+                components["fresnel"] = self._fresnel_penalty_map(dem, tx)
             if self.enabled_kernels.get("weather"):
-                rain_rate = float(self.weather_params.get("rain_rate", 0.0) or 0.0)
-                components["weather"] = np.full_like(free_space, rain_rate * 0.02)
+                components["weather"] = self._weather_map(distance_m)
 
             loss = sum(components.values())
             replace_mask = loss < combined
@@ -497,21 +638,21 @@ class PhysicsKernelChain:
 
             combined = np.minimum(combined, loss)
 
-        total = np.zeros_like(combined)
-        for component in component_maps.values():
-            total = total + component
-        self._last_breakdowns = {}
-        for y in range(dem.shape[0]):
-            for x in range(dem.shape[1]):
-                breakdown = {name: float(values[y, x]) for name, values in component_maps.items()}
-                breakdown["total"] = float(total[y, x])
-                self._last_breakdowns[(x, y)] = breakdown
+        # Inter-transmitter interference applies to the combined field.
+        if self.enabled_kernels.get("interference") and len(tx_list) > 1:
+            delta = multi_tx_interference_delta_db(
+                dem.shape, tx_list, env_params=self.env_params,
+                resolution_m=self.resolution_m,
+            )
+            component_maps["interference"] = delta
+            combined = combined + delta
 
+        self._component_maps = component_maps
         return combined.astype(loss_volume.dtype if loss_volume.dtype.kind == "f" else np.float32)
 
     def get_loss_breakdown(self, x: int, y: int) -> Dict[str, float]:
         """Return the component loss breakdown for a processed grid coordinate."""
-        default = {
+        breakdown = {
             "free_space": 0.0,
             "refraction": 0.0,
             "diffraction": 0.0,
@@ -520,7 +661,9 @@ class PhysicsKernelChain:
             "interference": 0.0,
             "weather": 0.0,
         }
-        breakdown = dict(default)
-        breakdown.update(self._last_breakdowns.get((int(x), int(y)), {}))
-        breakdown["total"] = sum(value for key, value in breakdown.items() if key != "total")
+        for name, values in self._component_maps.items():
+            breakdown[name] = float(values[int(y), int(x)])
+        breakdown["total"] = sum(
+            value for key, value in breakdown.items() if key != "total"
+        )
         return breakdown

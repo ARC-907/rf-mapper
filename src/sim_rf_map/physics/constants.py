@@ -18,14 +18,17 @@ R_EARTH = 6371.0
 # Speed of light in meters per second
 SPEED_OF_LIGHT = 3.0e8
 
-# ITU-R P.838 k/α tables for rain attenuation
+# ITU-R P.838-1 tabulated k/α regression coefficients for rain attenuation
+# (specific attenuation γ = k * R^α in dB/km, R in mm/h). Later editions
+# (P.838-3) compute these from a fitting formula; the tabulated -1 values are
+# used here as a documented approximation.
 # Values for horizontal polarization
 K_H = {
     "1 GHz": 0.0000387,
     "2 GHz": 0.000154,
     "4 GHz": 0.000650,
     "6 GHz": 0.00175,
-    "10 GHz": 0.00301,
+    "10 GHz": 0.0101,
     "15 GHz": 0.0367,
     "20 GHz": 0.0751,
     "25 GHz": 0.124,
@@ -44,7 +47,7 @@ ALPHA_H = {
     "2 GHz": 0.963,
     "4 GHz": 1.121,
     "6 GHz": 1.308,
-    "10 GHz": 1.332,
+    "10 GHz": 1.276,
     "15 GHz": 1.154,
     "20 GHz": 1.099,
     "25 GHz": 1.061,
@@ -64,7 +67,7 @@ K_V = {
     "2 GHz": 0.000138,
     "4 GHz": 0.000591,
     "6 GHz": 0.00155,
-    "10 GHz": 0.00265,
+    "10 GHz": 0.00887,
     "15 GHz": 0.0335,
     "20 GHz": 0.0691,
     "25 GHz": 0.113,
@@ -83,7 +86,7 @@ ALPHA_V = {
     "2 GHz": 0.923,
     "4 GHz": 1.075,
     "6 GHz": 1.265,
-    "10 GHz": 1.312,
+    "10 GHz": 1.264,
     "15 GHz": 1.128,
     "20 GHz": 1.065,
     "25 GHz": 1.030,

@@ -16,10 +16,11 @@ def test_fresnel_radius_edge_cases():
     assert r_small_dist > 0
     assert r_small_dist < 1  # Should be a small radius
 
-    # Very large distance
+    # Very large distance (300/900 is the rounded-c wavelength; the module
+    # uses exact c, so compare loosely).
     r_large_dist = fresnel_radius(100000, 900)
     assert r_large_dist > 0
-    assert r_large_dist == pytest.approx(np.sqrt((300 / 900) * 100000 / 4))
+    assert r_large_dist == pytest.approx(np.sqrt((300 / 900) * 100000 / 4), rel=1e-3)
 
     # Very low frequency
     r_low_freq = fresnel_radius(1000, 10)

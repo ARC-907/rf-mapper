@@ -1,8 +1,9 @@
 """
 Terrain reflection calculations for RF propagation.
 
-This module implements the reflection calculations as specified in ITU-R P.527-5,
-including reflection coefficients for smooth ground and other surfaces.
+Implements smooth-ground Fresnel reflection coefficients (ITU-R P.527
+formulation, grazing-angle convention) and a flat-earth two-ray ground
+bounce model used to modulate coverage grids.
 """
 
 from __future__ import annotations
@@ -11,89 +12,99 @@ import numpy as np
 import cmath
 from typing import Tuple, Optional, Dict, List
 
-from sim_rf_map.physics.constants import SPEED_OF_LIGHT, EnvParams
+from sim_rf_map.physics.constants import SPEED_OF_LIGHT, EnvParams, Polarization
 
 
-def calculate_reflection_coefficient_parallel(sin_theta_i: float, epsilon_r: float, 
+def _complex_permittivity(epsilon_r: float, sigma: float, wavelength: float) -> complex:
+    """Complex relative permittivity: eps_c = eps_r - j*60*sigma*lambda.
+
+    ITU-R P.527 convention (no 2*pi divisor on the conductivity term).
+    """
+    return complex(epsilon_r, -60.0 * sigma * wavelength)
+
+
+def calculate_reflection_coefficient_parallel(sin_psi: float, epsilon_r: float,
                                              sigma: float, wavelength: float) -> complex:
     """
-    Calculate the reflection coefficient for parallel polarization.
+    Reflection coefficient for parallel (vertical) polarization.
+
+    Grazing-angle convention (ITU-R P.527):
+
+        Gamma_v = (eps_c*sin(psi) - sqrt(eps_c - cos^2(psi)))
+                / (eps_c*sin(psi) + sqrt(eps_c - cos^2(psi)))
 
     Args:
-        sin_theta_i: Sine of the incident angle
-        epsilon_r: Relative permittivity of the reflecting surface
-        sigma: Conductivity of the reflecting surface in S/m
-        wavelength: Wavelength in meters
+        sin_psi: Sine of the grazing angle (angle between the ray and the
+            reflecting surface).
+        epsilon_r: Relative permittivity of the reflecting surface.
+        sigma: Conductivity of the reflecting surface in S/m.
+        wavelength: Wavelength in meters.
 
     Returns:
-        Complex reflection coefficient for parallel polarization
+        Complex reflection coefficient for parallel polarization.
     """
-    # Calculate cos(theta_i)
-    cos_theta_i = np.sqrt(1 - sin_theta_i**2)
+    cos2_psi = 1.0 - sin_psi**2
+    epsilon_c = _complex_permittivity(epsilon_r, sigma, wavelength)
+    sqrt_term = cmath.sqrt(epsilon_c - cos2_psi)
 
-    # Calculate complex permittivity
-    epsilon_c = complex(epsilon_r, -60 * sigma * wavelength / (2 * np.pi))
-
-    # Calculate square root term
-    sqrt_term = cmath.sqrt(epsilon_c - sin_theta_i**2)
-
-    # Calculate reflection coefficient (ITU-R P.527-5 formula)
-    numerator = sin_theta_i - sqrt_term * cos_theta_i
-    denominator = sin_theta_i + sqrt_term * cos_theta_i
-
+    numerator = epsilon_c * sin_psi - sqrt_term
+    denominator = epsilon_c * sin_psi + sqrt_term
     return numerator / denominator
 
 
-def calculate_reflection_coefficient_perpendicular(sin_theta_i: float, epsilon_r: float, 
+def calculate_reflection_coefficient_perpendicular(sin_psi: float, epsilon_r: float,
                                                  sigma: float, wavelength: float) -> complex:
     """
-    Calculate the reflection coefficient for perpendicular polarization.
+    Reflection coefficient for perpendicular (horizontal) polarization.
+
+    Grazing-angle convention (ITU-R P.527):
+
+        Gamma_h = (sin(psi) - sqrt(eps_c - cos^2(psi)))
+                / (sin(psi) + sqrt(eps_c - cos^2(psi)))
 
     Args:
-        sin_theta_i: Sine of the incident angle
-        epsilon_r: Relative permittivity of the reflecting surface
-        sigma: Conductivity of the reflecting surface in S/m
-        wavelength: Wavelength in meters
+        sin_psi: Sine of the grazing angle.
+        epsilon_r: Relative permittivity of the reflecting surface.
+        sigma: Conductivity of the reflecting surface in S/m.
+        wavelength: Wavelength in meters.
 
     Returns:
-        Complex reflection coefficient for perpendicular polarization
+        Complex reflection coefficient for perpendicular polarization.
     """
-    # Calculate complex permittivity
-    epsilon_c = complex(epsilon_r, -60 * sigma * wavelength / (2 * np.pi))
+    cos2_psi = 1.0 - sin_psi**2
+    epsilon_c = _complex_permittivity(epsilon_r, sigma, wavelength)
+    sqrt_term = cmath.sqrt(epsilon_c - cos2_psi)
 
-    # Calculate reflection coefficient (ITU-R P.527-5 formula)
-    numerator = epsilon_c - sin_theta_i**2
-    denominator = epsilon_c + sin_theta_i**2
-
+    numerator = sin_psi - sqrt_term
+    denominator = sin_psi + sqrt_term
     return numerator / denominator
 
 
-def calculate_reflection_coefficient(sin_theta_i: float, env_params: EnvParams) -> complex:
+def calculate_reflection_coefficient(sin_psi: float, env_params: EnvParams) -> complex:
     """
-    Calculate the reflection coefficient based on polarization.
+    Reflection coefficient for the polarization in ``env_params``.
 
     Args:
-        sin_theta_i: Sine of the incident angle
-        env_params: Environmental parameters
+        sin_psi: Sine of the grazing angle.
+        env_params: Environmental parameters (frequency, polarization,
+            ground permittivity/conductivity).
 
     Returns:
-        Complex reflection coefficient
+        Complex reflection coefficient.
     """
-    # Calculate wavelength
     wavelength = SPEED_OF_LIGHT / (env_params.freq_GHz * 1e9)
 
-    # Calculate reflection coefficient based on polarization
     if env_params.pol.value == "horizontal":
         return calculate_reflection_coefficient_perpendicular(
-            sin_theta_i, env_params.epsilon_r, env_params.sigma, wavelength
+            sin_psi, env_params.epsilon_r, env_params.sigma, wavelength
         )
     else:  # vertical polarization
         return calculate_reflection_coefficient_parallel(
-            sin_theta_i, env_params.epsilon_r, env_params.sigma, wavelength
+            sin_psi, env_params.epsilon_r, env_params.sigma, wavelength
         )
 
 
-def calculate_reflection_point(tx_pos: Tuple[float, float, float], 
+def calculate_reflection_point(tx_pos: Tuple[float, float, float],
                               rx_pos: Tuple[float, float, float],
                               ground_height: float) -> Tuple[float, float, float]:
     """
@@ -131,7 +142,7 @@ def calculate_reflection_point(tx_pos: Tuple[float, float, float],
     return (refl_x, refl_y, refl_z)
 
 
-def calculate_reflection_path_length(tx_pos: Tuple[float, float, float], 
+def calculate_reflection_path_length(tx_pos: Tuple[float, float, float],
                                     rx_pos: Tuple[float, float, float],
                                     refl_pos: Tuple[float, float, float]) -> float:
     """
@@ -147,15 +158,15 @@ def calculate_reflection_path_length(tx_pos: Tuple[float, float, float],
     """
     # Calculate distance from TX to reflection point
     d_tx = np.sqrt(
-        (tx_pos[0] - refl_pos[0])**2 + 
-        (tx_pos[1] - refl_pos[1])**2 + 
+        (tx_pos[0] - refl_pos[0])**2 +
+        (tx_pos[1] - refl_pos[1])**2 +
         (tx_pos[2] - refl_pos[2])**2
     )
 
     # Calculate distance from reflection point to RX
     d_rx = np.sqrt(
-        (rx_pos[0] - refl_pos[0])**2 + 
-        (rx_pos[1] - refl_pos[1])**2 + 
+        (rx_pos[0] - refl_pos[0])**2 +
+        (rx_pos[1] - refl_pos[1])**2 +
         (rx_pos[2] - refl_pos[2])**2
     )
 
@@ -177,64 +188,106 @@ def calculate_reflection_phase_shift(path_length: float, wavelength: float) -> f
     return 2 * np.pi * path_length / wavelength
 
 
-def apply_reflection(volume: np.ndarray, dem: np.ndarray, tx_list: list[dict], 
-                    env_params: Optional[EnvParams] = None) -> np.ndarray:
-    """
-    Apply reflection effects to a signal volume based on terrain gradients.
+def two_ray_delta_db(
+    dem: np.ndarray,
+    tx: Dict,
+    env_params: Optional[EnvParams] = None,
+    resolution_m: float = 30.0,
+    tx_height_m: float = 10.0,
+    rx_height_m: float = 1.5,
+    cap_db: float = 10.0,
+) -> np.ndarray:
+    """Flat-earth two-ray ground-bounce loss delta grid in dB.
+
+    Positive values mean destructive interference (extra loss); negative
+    values mean constructive enhancement. Approximation: flat reflecting
+    plane, fixed antenna heights above local terrain, far-field path
+    difference 2*h1*h2/d; cells closer than 5*(h1+h2) are left at 0 where
+    the far-field approximation breaks down.
 
     Args:
-        volume: Signal volume to modify
-        dem: Digital elevation model (terrain heights)
-        tx_list: List of transmitter positions as dicts with 'x' and 'y' keys
-        env_params: Environmental parameters (optional)
+        dem: 2D terrain grid (used for shape; flat-plane approximation).
+        tx: Transmitter dict with "x", "y", optional "frequency_mhz",
+            optional "height" (m above terrain).
+        env_params: Ground/polarization parameters; defaults to dry soil,
+            horizontal polarization at the transmitter frequency.
+        resolution_m: Ground size of one pixel in meters.
+        tx_height_m: Default TX antenna height when tx has no "height".
+        rx_height_m: Receiver height above terrain.
+        cap_db: Symmetric cap on the returned delta.
+    """
+    if resolution_m <= 0:
+        raise ValueError(f"resolution_m must be positive, got {resolution_m}")
+
+    freq_mhz = float(tx.get("frequency_mhz", 900.0))
+    if env_params is None:
+        env_params = EnvParams(freq_GHz=freq_mhz / 1000.0, pol=Polarization.HORIZONTAL)
+    wavelength = SPEED_OF_LIGHT / (env_params.freq_GHz * 1e9)
+
+    h1 = float(tx.get("height", tx_height_m))
+    h2 = rx_height_m
+
+    y_idx, x_idx = np.indices(dem.shape)
+    d = np.hypot(y_idx - float(tx["y"]), x_idx - float(tx["x"])) * resolution_m
+
+    far_field = d > 5.0 * (h1 + h2)
+    d_safe = np.where(far_field, d, np.inf)
+
+    # Far-field path difference and grazing angle.
+    path_diff = 2.0 * h1 * h2 / d_safe
+    sin_psi = np.clip((h1 + h2) / d_safe, 0.0, 1.0)
+
+    # Vectorized reflection coefficient (same formulas as the scalar API).
+    cos2_psi = 1.0 - sin_psi**2
+    eps_c = complex(env_params.epsilon_r, -60.0 * env_params.sigma * wavelength)
+    sqrt_term = np.sqrt(eps_c - cos2_psi.astype(complex))
+    if env_params.pol.value == "horizontal":
+        gamma = (sin_psi - sqrt_term) / (sin_psi + sqrt_term)
+    else:
+        gamma = (eps_c * sin_psi - sqrt_term) / (eps_c * sin_psi + sqrt_term)
+
+    phase = 2.0 * np.pi * path_diff / wavelength
+    rel_field = np.abs(1.0 + gamma * np.exp(1j * phase))
+
+    with np.errstate(divide="ignore"):
+        delta = -20.0 * np.log10(np.maximum(rel_field, 1e-6))
+    delta = np.clip(delta, -cap_db, cap_db)
+    delta[~far_field] = 0.0
+    return delta
+
+
+def apply_reflection(volume: np.ndarray, dem: np.ndarray, tx_list: list[dict],
+                    env_params: Optional[EnvParams] = None,
+                    resolution_m: float = 30.0,
+                    rx_height_m: float = 1.5) -> np.ndarray:
+    """
+    Apply flat-earth two-ray ground-bounce effects to a loss grid (dB).
+
+    For each transmitter the two-ray delta (destructive ripple = extra loss,
+    constructive = gain) is added to the loss volume. Approximate model —
+    see :func:`two_ray_delta_db` for assumptions.
+
+    Args:
+        volume: Path-loss grid in dB to modify.
+        dem: Digital elevation model (terrain heights).
+        tx_list: List of transmitter dicts with 'x' and 'y' keys.
+        env_params: Ground/polarization parameters (optional).
+        resolution_m: Ground size of one pixel in meters.
+        rx_height_m: Receiver height above terrain in meters.
 
     Returns:
-        Updated signal volume with reflection effects
+        Updated loss grid with reflection effects.
     """
-    # If no transmitters, return the original volume
     if not tx_list:
         return volume.copy()
 
-    # Create a copy of the input volume to modify
-    result = volume.copy()
-
-    # Calculate terrain gradients
-    gradient_y, gradient_x = np.gradient(dem)
-
-    # Process each transmitter
+    result = volume.astype(float, copy=True)
     for tx in tx_list:
-        tx_x, tx_y = tx["x"], tx["y"]
-
-        # Calculate local terrain slope at transmitter location
-        if 0 <= tx_y < dem.shape[0] and 0 <= tx_x < dem.shape[1]:
-            slope_x = gradient_x[tx_y, tx_x]
-            slope_y = gradient_y[tx_y, tx_x]
-
-            # Skip if terrain is flat (no gradient)
-            if abs(slope_x) < 1e-5 and abs(slope_y) < 1e-5:
-                continue
-
-            # Determine reflection direction based on terrain slope
-            dx = int(np.sign(slope_x))
-            dy = int(np.sign(slope_y))
-
-            # Calculate bounce position
-            bounce_y = tx_y + dy
-            bounce_x = tx_x + dx
-
-            # Skip if bounce position is outside the volume bounds
-            if bounce_y < 0 or bounce_y >= volume.shape[0] or bounce_x < 0 or bounce_x >= volume.shape[1]:
-                continue
-
-            # Apply reflection effect at the bounce position and surrounding area
-            for i in range(3):  # Apply to a small area around the bounce point
-                for j in range(3):
-                    y = bounce_y + i
-                    x = bounce_x + j
-
-                    if 0 <= y < volume.shape[0] and 0 <= x < volume.shape[1]:
-                        # Add reflection effect (higher value indicates stronger signal)
-                        reflection_strength = 0.5 / (1 + i + j)  # Decrease with distance from bounce point
-                        result[y, x] += reflection_strength
-
+        result += two_ray_delta_db(
+            dem,
+            tx,
+            env_params=env_params,
+            resolution_m=resolution_m,
+            rx_height_m=rx_height_m,
+        )
     return result

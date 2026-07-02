@@ -8,86 +8,113 @@ class TestKnifeEdge(unittest.TestCase):
 
     def test_fresnel_nu(self):
         """Test the fresnel_nu function with known values."""
-        # Test with simple values
-        h = 10.0  # obstacle height
-        d1 = 100.0  # distance from transmitter to obstacle
-        d2 = 100.0  # distance from obstacle to receiver
-        wavelength = 0.1  # wavelength in meters (3 GHz)
-        
-        expected_nu = 10.0 * np.sqrt(2 / (0.1 * (1/100.0 + 1/100.0)))
+        # v = h * sqrt((2/lambda) * (1/d1 + 1/d2))  (ITU-R P.526)
+        h = 10.0
+        d1 = 100.0
+        d2 = 100.0
+        wavelength = 0.1  # meters (~3 GHz)
+
+        # 10 * sqrt((2/0.1) * 0.02) = 10 * sqrt(0.4) = 6.3246
         result = fresnel_nu(h, d1, d2, wavelength)
-        
-        self.assertAlmostEqual(result, expected_nu)
-        
-        # Test with zero height (no obstacle)
-        result_zero = fresnel_nu(0.0, d1, d2, wavelength)
-        self.assertEqual(result_zero, 0.0)
-        
-        # Test with different distances
-        result_diff = fresnel_nu(h, 200.0, 50.0, wavelength)
-        expected_diff = 10.0 * np.sqrt(2 / (0.1 * (1/200.0 + 1/50.0)))
-        self.assertAlmostEqual(result_diff, expected_diff)
+        self.assertAlmostEqual(result, 6.3246, places=3)
+
+        # Zero height (grazing) gives v = 0.
+        self.assertEqual(fresnel_nu(0.0, d1, d2, wavelength), 0.0)
+
+        # Asymmetric distances.
+        expected_diff = 10.0 * np.sqrt((2.0 / 0.1) * (1 / 200.0 + 1 / 50.0))
+        self.assertAlmostEqual(fresnel_nu(h, 200.0, 50.0, wavelength), expected_diff)
+
+        # Fixed obstacle height diffracts more when nearer an endpoint
+        # (v grows as d1 or d2 shrinks).
+        v_mid = fresnel_nu(h, 100.0, 100.0, wavelength)
+        v_near = fresnel_nu(h, 10.0, 190.0, wavelength)
+        self.assertGreater(v_near, v_mid)
+
+        # Invalid inputs raise.
+        with self.assertRaises(ValueError):
+            fresnel_nu(h, 0.0, 100.0, wavelength)
+        with self.assertRaises(ValueError):
+            fresnel_nu(h, 100.0, 100.0, 0.0)
 
     def test_knife_edge_loss_nu(self):
         """Test the knife_edge_loss_nu function with known values."""
-        # Test with nu <= -0.78 (no loss)
+        # No loss below the ITU threshold.
         self.assertEqual(knife_edge_loss_nu(-0.8), 0.0)
         self.assertEqual(knife_edge_loss_nu(-1.0), 0.0)
-        
-        # Test with nu = 0 (approximately 6.9 dB loss)
-        self.assertAlmostEqual(knife_edge_loss_nu(0.0), 6.9)
-        
-        # Test with positive nu values
-        self.assertGreater(knife_edge_loss_nu(1.0), 6.9)
+
+        # At v = 0 the approximation gives ~6.03 dB (theory: 6.02 dB).
+        self.assertAlmostEqual(knife_edge_loss_nu(0.0), 6.03, delta=0.05)
+
+        # Continuity near the threshold: loss just above -0.78 is small.
+        self.assertLess(knife_edge_loss_nu(-0.77), 0.2)
+
+        # Monotonically increasing with v.
+        self.assertGreater(knife_edge_loss_nu(1.0), knife_edge_loss_nu(0.0))
         self.assertGreater(knife_edge_loss_nu(2.0), knife_edge_loss_nu(1.0))
-        
-        # Test the formula directly for a specific value
+        self.assertGreater(knife_edge_loss_nu(10.0), knife_edge_loss_nu(2.0))
+
+        # Continuity across v = 1 (the old implementation had a ~7 dB seam).
+        self.assertAlmostEqual(
+            knife_edge_loss_nu(1.0001), knife_edge_loss_nu(0.9999), delta=0.01
+        )
+
+        # Exact formula at a spot value.
         nu = 1.5
         expected = 6.9 + 20 * np.log10(np.sqrt((nu - 0.1) ** 2 + 1) + nu - 0.1)
         self.assertAlmostEqual(knife_edge_loss_nu(nu), expected)
 
+        # Large-v asymptote: J(v) ~= 12.95 + 20*log10(v).
+        self.assertAlmostEqual(
+            knife_edge_loss_nu(10.0), 12.95 + 20 * np.log10(10.0), delta=0.2
+        )
+
     def test_compute_knife_edge_loss(self):
         """Test the compute_knife_edge_loss function with a simple terrain profile."""
-        # Create a simple terrain profile with a single obstacle in the middle
+        # Single 10 m obstacle in the middle of an 11-sample profile.
         profile = np.zeros(11)
-        profile[5] = 10.0  # 10m obstacle in the middle
-        
-        tx_h = 2.0  # transmitter height
-        rx_h = 2.0  # receiver height
-        f_mhz = 900.0  # frequency in MHz
-        
-        # Calculate expected result
-        wavelength = 300.0 / f_mhz
-        d_total = len(profile)
-        h_tx = profile[0] + tx_h
-        h_rx = profile[-1] + rx_h
-        
-        # For the obstacle at index 5
-        d1 = 5
-        d2 = d_total - 5
-        h_obs = profile[5]
-        z_line = h_tx + (h_rx - h_tx) * (5 / d_total)
-        h = h_obs - z_line
-        nu = fresnel_nu(h, d1, d2, wavelength)
-        expected_loss = knife_edge_loss_nu(nu)
-        
-        # Compute the actual loss
+        profile[5] = 10.0
+
+        tx_h = 2.0
+        rx_h = 2.0
+        f_mhz = 900.0
+
+        # Mirror the corrected geometry: N samples span (N-1) spacings.
+        wavelength = 299_792_458.0 / (f_mhz * 1e6)
+        d_total = 10.0  # (11 - 1) * 1.0 m
+        d1 = 5.0
+        d2 = 5.0
+        z_line = (profile[0] + tx_h) + ((profile[-1] + rx_h) - (profile[0] + tx_h)) * (
+            d1 / d_total
+        )
+        h = profile[5] - z_line
+        expected_loss = knife_edge_loss_nu(fresnel_nu(h, d1, d2, wavelength))
+
         result = compute_knife_edge_loss(profile, tx_h, rx_h, f_mhz)
-        
-        # Verify the result
         self.assertAlmostEqual(result, expected_loss)
-        
-        # Test with flat terrain (no obstacles)
+        self.assertGreater(result, 0.0)
+
+        # Flat terrain with raised antennas: no obstruction, no loss.
         flat_profile = np.zeros(11)
-        flat_result = compute_knife_edge_loss(flat_profile, tx_h, rx_h, f_mhz)
-        self.assertEqual(flat_result, 0.0)
-        
-        # Test with multiple obstacles
+        self.assertEqual(compute_knife_edge_loss(flat_profile, tx_h, rx_h, f_mhz), 0.0)
+
+        # Multiple obstacles still produce a positive worst-edge loss.
         multi_profile = np.zeros(11)
         multi_profile[3] = 5.0
         multi_profile[7] = 8.0
-        multi_result = compute_knife_edge_loss(multi_profile, tx_h, rx_h, f_mhz)
-        self.assertGreater(multi_result, 0.0)
+        self.assertGreater(compute_knife_edge_loss(multi_profile, tx_h, rx_h, f_mhz), 0.0)
+
+        # Wider sample spacing (same heights over a longer path) reduces v and
+        # therefore the loss.
+        loss_1m = compute_knife_edge_loss(profile, tx_h, rx_h, f_mhz, sample_spacing_m=1.0)
+        loss_30m = compute_knife_edge_loss(profile, tx_h, rx_h, f_mhz, sample_spacing_m=30.0)
+        self.assertGreater(loss_1m, loss_30m)
+
+        # Invalid inputs raise.
+        with self.assertRaises(ValueError):
+            compute_knife_edge_loss(profile, tx_h, rx_h, 0.0)
+        with self.assertRaises(ValueError):
+            compute_knife_edge_loss(profile, tx_h, rx_h, f_mhz, sample_spacing_m=0.0)
 
 
 if __name__ == "__main__":

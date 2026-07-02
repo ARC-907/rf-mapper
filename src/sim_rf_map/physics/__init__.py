@@ -13,9 +13,7 @@ from .rf_tunnel import apply_tunnel_physics  # noqa: F401
 from .line_of_sight import calculate_realistic_los, apply_realistic_los  # noqa: F401
 from .rf_behavior import RFBehaviorOptions, apply_global_behavior, apply_tower_behavior  # noqa: F401
 
-# Import the actual implementation from propagation module
-from sim_rf_map.propagation.high_physics import simulate_high_physics_rf as _high_physics_impl
-from sim_rf_map.rf_desktop_app.gui import apply_refraction
+from .refraction import apply_earth_curvature
 
 
 def simulate_high_physics_rf(dem, tx_list, rf_options=None):
@@ -41,11 +39,21 @@ def simulate_high_physics_rf(dem, tx_list, rf_options=None):
     Returns:
         2D numpy array representing the RF propagation loss
     """
+    # Imported lazily: propagation.high_physics itself imports physics
+    # submodules, so a module-level import here would be circular.
+    from sim_rf_map.propagation.high_physics import (
+        simulate_high_physics_rf as _high_physics_impl,
+    )
+
     if not tx_list:
         return np.zeros_like(dem, dtype=float)
 
-    # Apply refraction to account for Earth curvature
-    refracted_dem = apply_refraction(dem)
+    # Apply effective-earth curvature centered on the first transmitter so
+    # long-range line-of-sight reflects atmospheric refraction (k=4/3).
+    center = (tx_list[0].get("y"), tx_list[0].get("x"))
+    if center[0] is None or center[1] is None:
+        center = None
+    refracted_dem = apply_earth_curvature(dem, center=center)
 
     # Use the high physics implementation with the refracted DEM and RF options
     return _high_physics_impl(refracted_dem, tx_list, rf_options)

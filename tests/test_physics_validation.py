@@ -110,9 +110,10 @@ class TestPhysicsValidation(unittest.TestCase):
         # Calculate diffraction loss
         loss = calculate_knife_edge_loss(v)
         
-        # Expected loss for v >> 1 should approach 6.9 + 20*log10(v)
+        # Expected loss for v >> 1 approaches the ITU-R P.526 asymptote
+        # J(v) ~= 12.95 + 20*log10(v)  (from J(v) ~= 6.9 + 20*log10(2v))
         if v > 1:
-            expected_loss = 6.9 + 20 * np.log10(v)
+            expected_loss = 12.95 + 20 * np.log10(v)
             self.assertAlmostEqual(loss, expected_loss, delta=1.0)
         
         # For v = 0, loss should be approximately 6.0 dB
@@ -232,16 +233,36 @@ class TestPhysicsValidation(unittest.TestCase):
             self.assertTrue(attenuation > attenuation_vertical, 
                            "Horizontal polarization should have higher rain attenuation than vertical at high frequencies")
             
-    def test_itu_annex7_validation(self):
-        """Test against ITU-R P.452-17 Annex 7 validation paths."""
-        # This is a placeholder for a more comprehensive test that would validate
-        # against the reference paths in Annex 7 of ITU-R P.452-17
-        
-        # In a real implementation, this would load terrain profiles from Annex 7
-        # and compare calculated path losses with reference values
-        
-        # For now, we'll just check that the RMSE requirement is documented
-        self.assertTrue(True, "Annex 7 validation with RMSE < 2 dB is required")
+    def test_reference_values(self):
+        """Validate against independently derived reference values.
+
+        These numbers were computed by hand from the published formulas
+        (not by running this codebase), so a regression in any formula
+        breaks this test.
+        """
+        from sim_rf_map.rf.propagation import fspl_db_km_mhz
+        from sim_rf_map.knife_edge import knife_edge_loss_nu, fresnel_nu
+
+        # FSPL, ITU-R P.525: 1 km @ 2400 MHz -> 100.05 dB
+        self.assertAlmostEqual(fspl_db_km_mhz(1.0, 2400.0), 100.05, delta=0.05)
+        # 10 km @ 900 MHz -> 111.53 dB
+        self.assertAlmostEqual(fspl_db_km_mhz(10.0, 900.0), 111.53, delta=0.05)
+
+        # Knife-edge J(v): at v=0 the approximation gives ~6.03 dB
+        # (theoretical half-plane value is 6.02 dB).
+        self.assertAlmostEqual(knife_edge_loss_nu(0.0), 6.03, delta=0.05)
+        # v = 1: J = 6.9 + 20*log10(sqrt(0.9^2+1)+0.9) = 13.93 dB
+        self.assertAlmostEqual(knife_edge_loss_nu(1.0), 13.93, delta=0.05)
+
+        # Fresnel-Kirchhoff parameter: h=10 m, d1=d2=100 m, lambda=0.1 m
+        # v = 10*sqrt((2/0.1)*(2/100)) = 10*sqrt(0.4) = 6.325
+        self.assertAlmostEqual(fresnel_nu(10.0, 100.0, 100.0, 0.1), 6.325, delta=0.005)
+
+        # First Fresnel zone mid-path radius: 2.4 GHz over 1 km
+        # r1 = sqrt(lambda*d1*d2/d) = sqrt(0.12491*500*500/1000) = 5.59 m
+        wavelength = SPEED_OF_LIGHT / 2.4e9
+        radius = calculate_fresnel_zone_radius(1, wavelength, 500.0, 500.0)
+        self.assertAlmostEqual(radius, 5.59, delta=0.05)
         
         
 if __name__ == "__main__":

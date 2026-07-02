@@ -11,6 +11,7 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 from sim_rf_map.physics.constants import SPEED_OF_LIGHT, EnvParams
+from sim_rf_map.knife_edge import fresnel_nu, knife_edge_loss_nu
 
 
 def calculate_wavelength(freq_GHz: float) -> float:
@@ -39,14 +40,8 @@ def calculate_fresnel_parameter(h: float, d1: float, d2: float, wavelength: floa
     Returns:
         Fresnel diffraction parameter v
     """
-    # Convert distances to meters for calculation
-    d1_m = d1 * 1000
-    d2_m = d2 * 1000
-    
-    # ITU-R P.526-16 formula
-    v = h * np.sqrt(2 * (d1_m + d2_m) / (wavelength * d1_m * d2_m))
-    
-    return v
+    # Delegate to the canonical implementation (distances converted to meters).
+    return fresnel_nu(h, d1 * 1000.0, d2 * 1000.0, wavelength)
 
 
 def calculate_knife_edge_loss(v: float) -> float:
@@ -59,14 +54,10 @@ def calculate_knife_edge_loss(v: float) -> float:
     Returns:
         Diffraction loss in dB
     """
-    # ITU-R P.526-16 formula
-    if v <= -0.78:
-        return 0.0
-    if v > 1.0:
-        return 6.9 + 20 * np.log10(v)
-    
-    # L_k = 6.9 + 20*log10(sqrt((v-0.1)^2+1) + v-0.1)
-    return 6.9 + 20 * np.log10(np.sqrt((v - 0.1) ** 2 + 1) + v - 0.1)
+    # Delegate to the canonical J(v) approximation. The general formula is
+    # continuous and valid for all v > -0.78, so no separate large-v branch
+    # is used (a 6.9+20log10(v) shortcut creates a ~7 dB seam at v=1).
+    return knife_edge_loss_nu(v)
 
 
 def find_main_edge(profile: np.ndarray, distances: np.ndarray, wavelength: float) -> Tuple[int, float]:

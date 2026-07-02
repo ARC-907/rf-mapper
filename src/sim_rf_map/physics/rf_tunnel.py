@@ -70,12 +70,23 @@ def calculate_tunnel_effect(dem: np.ndarray, tx_pos: tuple[int, int], freq_mhz: 
     distance = np.sqrt((y - tx_pos[0])**2 + (x - tx_pos[1])**2)
     
     # Calculate wavelength in meters (assuming 1 pixel = 1 meter)
-    wavelength = 300 / freq_mhz
-    
+    wavelength = 299.792458 / freq_mhz
+
+    # Assumed guide width for detected canyon/tunnel structures. Waveguide
+    # behavior requires the guide to be wide relative to the wavelength;
+    # below cutoff (wavelength >= width) no guiding occurs.
+    tunnel_width_m = 10.0
+
+    # Guiding efficiency rises as the wavelength shrinks relative to the
+    # guide width — an approximate stand-in for modal attenuation
+    # (alpha ~ lambda^2 / w^3 in lossy waveguide theory).
+    guide_efficiency = max(0.0, 1.0 - wavelength / tunnel_width_m)
+
     # Calculate tunnel effect (waveguide effect)
-    # Higher gain for tunnels aligned with transmitter direction
     tunnel_effect = np.zeros_like(dem)
-    
+    if guide_efficiency == 0.0:
+        return tunnel_effect
+
     # Only apply tunnel effect where tunnels are detected
     tunnel_indices = np.where(tunnel_mask > 0)
     for i, j in zip(*tunnel_indices):
@@ -84,17 +95,19 @@ def calculate_tunnel_effect(dem: np.ndarray, tx_pos: tuple[int, int], freq_mhz: 
         dist = np.sqrt(dy**2 + dx**2)
         if dist == 0:
             continue
-            
-        # Calculate tunnel alignment factor (how well the tunnel is aligned with the signal path)
-        # This is a simplified model - in reality would need to check actual tunnel orientation
+
+        # Alignment with the actual tunnel axis is not modeled; treat all
+        # detected structures as aligned (upper-bound approximation).
         alignment_factor = 1.0
-        
-        # Calculate waveguide gain - higher for frequencies that fit well in the tunnel
-        # This is a simplified model based on waveguide theory
-        waveguide_gain = 10.0 * np.exp(-distance[i, j] / 1000.0) * alignment_factor
-        
+
+        # Waveguide gain decays with distance and scales with how well the
+        # wavelength fits the guide.
+        waveguide_gain = (
+            10.0 * np.exp(-distance[i, j] / 1000.0) * alignment_factor * guide_efficiency
+        )
+
         tunnel_effect[i, j] = waveguide_gain
-    
+
     return tunnel_effect
 
 

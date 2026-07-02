@@ -140,12 +140,18 @@ class AnalysisModel:
         # In a real implementation, this would use the kernel chain to calculate
         # path loss based on the physics options
         
-        # Create distance matrix
+        # Create distance matrix in meters (grid pixels scaled by resolution).
         y_indices, x_indices = np.indices(dem.shape)
-        distances = np.sqrt((x_indices - tx_x)**2 + (y_indices - tx_y)**2)
-        
-        # Calculate free space path loss
-        path_loss = 20 * np.log10(distances + 1) + 20 * np.log10(self.env_params.freq_GHz) + 32.44
+        resolution_m = getattr(self, "resolution_m", 30.0)
+        distances_m = (
+            np.sqrt((x_indices - tx_x) ** 2 + (y_indices - tx_y) ** 2) * resolution_m
+        )
+
+        # Canonical free-space path loss (the previous inline formula fed
+        # GHz into an MHz-calibrated constant, understating loss by ~60 dB).
+        from sim_rf_map.rf.propagation import free_space_path_loss_db
+
+        path_loss = free_space_path_loss_db(distances_m, self.env_params.freq_GHz * 1e9)
         
         # Apply other physics effects using the kernel chain
         # This would be more complex in a real implementation

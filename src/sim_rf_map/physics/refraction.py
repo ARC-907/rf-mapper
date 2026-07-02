@@ -41,18 +41,27 @@ def calculate_refractivity(temperature: float, pressure: float, rel_humidity: fl
 def calculate_refractivity_gradient(N_surface: float, h: float = 1000.0) -> float:
     """
     Calculate the refractivity gradient in the first kilometer above ground.
-    
+
+    Uses the ITU-R P.453 median-gradient relationship for the lowest 1 km:
+
+        dN = -7.32 * exp(0.005577 * N_s)
+
+    so the gradient actually responds to the surface refractivity computed
+    from temperature/pressure/humidity. For a standard atmosphere
+    (N_s ~ 315) this gives about -42 N-units/km, i.e. k ~ 4/3.
+
     Args:
-        N_surface: Surface refractivity
-        h: Height in meters for gradient calculation (default 1000m)
-        
+        N_surface: Surface refractivity in N-units
+        h: Layer thickness in meters (the relationship is calibrated for the
+           first 1000 m; kept for signature compatibility)
+
     Returns:
-        Refractivity gradient dN/dh in N-units/km
+        Refractivity gradient dN/dh in N-units/km (negative in normal
+        atmospheric conditions)
     """
-    # Simplified model based on ITU-R P.452-17
-    # Typical values range from -40 to -400 N-units/km
-    # Default to a standard atmosphere gradient of -40 N-units/km
-    return -40.0
+    if N_surface <= 0:
+        raise ValueError(f"Surface refractivity must be positive, got {N_surface}")
+    return float(-7.32 * np.exp(0.005577 * N_surface))
 
 
 def calculate_effective_earth_radius_factor(N_surface: Optional[float] = None, 
@@ -143,7 +152,45 @@ def apply_earth_curvature_correction(profile: np.ndarray,
     return corrected_profile
 
 
-def calculate_ray_bending(distance_km: float, 
+def apply_earth_curvature(
+    dem: np.ndarray,
+    center: Optional[Tuple[float, float]] = None,
+    resolution_m: float = 1.0,
+    k_factor: float = 4.0 / 3.0,
+) -> np.ndarray:
+    """Subtract the effective-earth curvature drop from a DEM grid.
+
+    Heights fall away from the tangent plane at ``center`` (default: grid
+    center, typically the transmitter cell) by d^2 / (2*k*Re). This is the
+    standard flat-earth transform for line-of-sight work with an effective
+    earth radius k*Re.
+
+    Args:
+        dem: 2D terrain grid in meters.
+        center: (row, col) of the reference point; grid center when None.
+        resolution_m: Ground size of one pixel in meters.
+        k_factor: Effective earth radius factor (4/3 standard atmosphere).
+
+    Returns:
+        Curvature-corrected copy of the DEM (meters).
+    """
+    if resolution_m <= 0:
+        raise ValueError(f"resolution_m must be positive, got {resolution_m}")
+    if k_factor <= 0:
+        raise ValueError(f"k_factor must be positive, got {k_factor}")
+
+    rows, cols = dem.shape
+    if center is None:
+        center = (rows / 2.0, cols / 2.0)
+    cy, cx = center
+
+    yy, xx = np.meshgrid(np.arange(rows), np.arange(cols), indexing="ij")
+    range_m = np.hypot(yy - cy, xx - cx) * resolution_m
+    drop_m = range_m**2 / (2.0 * k_factor * R_EARTH * 1000.0)
+    return dem - drop_m
+
+
+def calculate_ray_bending(distance_km: float,
                          height1_m: float, 
                          height2_m: float, 
                          env_params: EnvParams) -> Tuple[np.ndarray, np.ndarray]:

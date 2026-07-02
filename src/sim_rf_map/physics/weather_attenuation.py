@@ -13,27 +13,62 @@ from typing import Optional, Dict, cast
 from sim_rf_map.physics.constants import EnvParams, Polarization
 
 
-def calculate_cloud_attenuation(freq_GHz: float, lwc: float, path_length_km: float) -> float:
+def _water_double_debye(freq_GHz: float, temperature_k: float) -> tuple[float, float]:
+    """Complex permittivity of liquid water (ITU-R P.840 double-Debye).
+
+    Returns (eps_prime, eps_double_prime) at ``freq_GHz`` and
+    ``temperature_k``.
     """
-    Calculate cloud attenuation using the ITU-R P.840-9 model.
-    
+    theta = 300.0 / temperature_k
+    eps0 = 77.66 + 103.3 * (theta - 1.0)
+    eps1 = 0.0671 * eps0
+    eps2 = 3.52
+    fp = 20.20 - 146.0 * (theta - 1.0) + 316.0 * (theta - 1.0) ** 2  # GHz
+    fs = 39.8 * fp  # GHz
+
+    f = freq_GHz
+    eps_dp = (
+        f * (eps0 - eps1) / (fp * (1.0 + (f / fp) ** 2))
+        + f * (eps1 - eps2) / (fs * (1.0 + (f / fs) ** 2))
+    )
+    eps_p = (
+        (eps0 - eps1) / (1.0 + (f / fp) ** 2)
+        + (eps1 - eps2) / (1.0 + (f / fs) ** 2)
+        + eps2
+    )
+    return eps_p, eps_dp
+
+
+def calculate_cloud_attenuation(
+    freq_GHz: float, lwc: float, path_length_km: float, temperature_c: float = 0.0
+) -> float:
+    """
+    Calculate cloud attenuation using the ITU-R P.840 Rayleigh model.
+
+    Specific attenuation coefficient (dB/km per g/m^3):
+
+        K_l = 0.819 * f / (eps'' * (1 + eta^2)),   eta = (2 + eps') / eps''
+
+    with the water permittivity from the temperature-dependent double-Debye
+    model. Default temperature 0 C (standard for cloud liquid water).
+
     Args:
         freq_GHz: Frequency in GHz
-        lwc: Liquid water content in g/m³
+        lwc: Liquid water content in g/m^3
         path_length_km: Path length through cloud in kilometers
-        
+        temperature_c: Cloud liquid water temperature in Celsius
+
     Returns:
         Cloud attenuation in dB
     """
-    # Calculate specific attenuation coefficient K_l
-    # ITU-R P.840-9 formula: K_l = f^2 * (0.819f - 0.052)
-    K_l = freq_GHz**2 * (0.819 * freq_GHz - 0.052)
-    
-    # Calculate cloud attenuation
-    # A_c = γ_c * d = K_l * LWC * d
-    attenuation = K_l * lwc * path_length_km
-    
-    return attenuation
+    if freq_GHz <= 0:
+        raise ValueError(f"Frequency must be positive, got {freq_GHz} GHz")
+    eps_p, eps_dp = _water_double_debye(freq_GHz, temperature_c + 273.15)
+    eta = (2.0 + eps_p) / eps_dp
+    K_l = 0.819 * freq_GHz / (eps_dp * (1.0 + eta**2))
+
+    # A_c = K_l * LWC * d
+    return K_l * lwc * path_length_km
 
 
 def calculate_rain_attenuation(rain_rate: float, path_length_km: float,

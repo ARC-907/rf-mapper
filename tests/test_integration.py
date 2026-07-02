@@ -157,12 +157,18 @@ class TestIntegration(unittest.TestCase):
         # Verify that clearance is calculated
         self.assertIsNotNone(clearance, "Fresnel clearance calculation should return a value")
         
-        # 5. Apply interference
-        interference_volume = apply_interference(self.loss_volume, self.dem, tx_list, self.env_params)
-        
+        # 5. Apply interference — requires at least two transmitters (a
+        # single source cannot interfere with itself).
+        two_tx = [{"x": 25, "y": 25, "height": 30.0}, {"x": 60, "y": 60, "height": 30.0}]
+        interference_volume = apply_interference(self.loss_volume, self.dem, two_tx, self.env_params)
+
         # Verify that interference changes the volume
-        self.assertFalse(np.array_equal(interference_volume, self.loss_volume), 
+        self.assertFalse(np.array_equal(interference_volume, self.loss_volume),
                         "Interference should modify the loss volume")
+
+        # Single transmitter: no interference source, volume unchanged.
+        single_volume = apply_interference(self.loss_volume, self.dem, tx_list, self.env_params)
+        self.assertTrue(np.array_equal(single_volume, self.loss_volume))
         
         # 6. Apply weather attenuation
         weather_params = {

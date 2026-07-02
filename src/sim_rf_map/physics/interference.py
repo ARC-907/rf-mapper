@@ -111,30 +111,97 @@ def calculate_two_ray_interference(direct_amplitude: float, direct_phase: float,
     return calculate_power_from_field(E)
 
 
-def apply_interference(volume: np.ndarray, dem: np.ndarray, tx_list: list[dict],
-                       env_params: Optional[EnvParams] = None) -> np.ndarray:
-    """Apply a deterministic interference-like adjustment to a loss volume."""
-    if not tx_list:
-        return volume.copy()
+def multi_tx_interference_delta_db(
+    dem_shape: Tuple[int, int],
+    tx_list: list[dict],
+    env_params: Optional[EnvParams] = None,
+    resolution_m: float = 30.0,
+    cap_db: float = 10.0,
+) -> np.ndarray:
+    """Phase-based inter-transmitter interference delta grid in dB.
 
-    result = volume.astype(float, copy=True)
-    y_indices, x_indices = np.indices(dem.shape)
-    freq = 2.4 if env_params is None else max(float(env_params.freq_GHz), 0.001)
+    Sums equal-amplitude fields from every transmitter with true propagation
+    phases (2*pi*d/lambda) and compares against incoherent power addition.
+    Positive values are destructive fading (extra loss), negative values are
+    constructive enhancement. Zero when fewer than two transmitters exist.
+    """
+    if len(tx_list) < 2:
+        return np.zeros(dem_shape, dtype=float)
+    if resolution_m <= 0:
+        raise ValueError(f"resolution_m must be positive, got {resolution_m}")
 
+    freq_GHz = 2.4 if env_params is None else max(float(env_params.freq_GHz), 1e-3)
+    wavelength = calculate_wavelength(freq_GHz)
+
+    y_indices, x_indices = np.indices(dem_shape)
+    field = np.zeros(dem_shape, dtype=complex)
     for tx in tx_list:
         tx_x = float(tx.get("x", 0))
         tx_y = float(tx.get("y", 0))
-        distance = np.hypot(x_indices - tx_x, y_indices - tx_y)
-        result += 0.5 * (1.0 + np.sin(distance / freq))
+        distance_m = np.hypot(x_indices - tx_x, y_indices - tx_y) * resolution_m
+        field += np.exp(1j * calculate_phase(distance_m, wavelength))
 
+    n = len(tx_list)
+    coherent_power = np.abs(field) ** 2
+    incoherent_power = float(n)  # n unit-amplitude sources added in power
+    with np.errstate(divide="ignore"):
+        delta = -10.0 * np.log10(np.maximum(coherent_power / incoherent_power, 1e-12))
+    return np.clip(delta, -cap_db, cap_db)
+
+
+def apply_interference(volume: np.ndarray, dem: np.ndarray, tx_list: list[dict],
+                       env_params: Optional[EnvParams] = None,
+                       resolution_m: float = 30.0) -> np.ndarray:
+    """Apply inter-transmitter phase interference to a loss volume (dB).
+
+    With fewer than two transmitters there is no interference source and the
+    volume is returned unchanged.
+    """
+    if len(tx_list) < 2:
+        return volume.copy()
+
+    delta = multi_tx_interference_delta_db(
+        dem.shape, tx_list, env_params=env_params, resolution_m=resolution_m
+    )
+    result = volume.astype(float, copy=True) + delta
     return result.astype(volume.dtype if volume.dtype.kind == "f" else np.float32)
 
 
-def compute_interference(volume_list: list[np.ndarray], 
+def combine_loss_maps(volume_list: list[np.ndarray],
+                      phase_list: Optional[list[np.ndarray]] = None) -> np.ndarray:
+    """Combine per-transmitter loss maps (dB) into one coverage map.
+
+    Without phases: strongest-signal-wins (element-wise minimum loss).
+    With phases: coherent complex-field summation — amplitudes derived from
+    each loss map (10^(-L/20)), summed with the provided phases, and the
+    combined magnitude converted back to loss in dB.
+    """
+    if not volume_list:
+        raise ValueError("At least one loss map is required")
+    if len(volume_list) == 1:
+        return np.asarray(volume_list[0]).copy()
+
+    if phase_list is not None and len(phase_list) == len(volume_list):
+        field = np.zeros_like(np.asarray(volume_list[0], dtype=float), dtype=complex)
+        for loss, phase in zip(volume_list, phase_list):
+            amplitude = 10.0 ** (-np.asarray(loss, dtype=float) / 20.0)
+            field += amplitude * np.exp(1j * np.asarray(phase, dtype=float))
+        magnitude = np.maximum(np.abs(field), 1e-12)
+        return -20.0 * np.log10(magnitude)
+
+    return np.minimum.reduce([np.asarray(v, dtype=float) for v in volume_list])
+
+
+def compute_interference(volume_list: list[np.ndarray],
                         phase_list: Optional[list[np.ndarray]] = None,
                         env_params: Optional[EnvParams] = None) -> np.ndarray:
     """
     Calculate coherence between multiple signal volumes.
+
+    NOTE: this is a statistical coherence metric (agreement between
+    volumes), not electromagnetic interference. Use
+    :func:`combine_loss_maps` to merge per-transmitter loss maps and
+    :func:`multi_tx_interference_delta_db` for phase-based interference.
 
     Coherence is calculated as 1 - (standard_deviation / (average + epsilon)),
     clipped to the range [0, 1]. Higher values indicate more coherent signals.

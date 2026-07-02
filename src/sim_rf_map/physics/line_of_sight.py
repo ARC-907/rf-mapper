@@ -9,7 +9,7 @@ based on the obstacles.
 from __future__ import annotations
 
 import numpy as np
-from sim_rf_map.rf_desktop_app.gui import compute_los, compute_los_diffraction
+from sim_rf_map.terrain_los import compute_los, compute_los_diffraction
 
 
 def weighted_line_of_sight(dem: np.ndarray, tx_pos: tuple[int, int], freq_mhz: float) -> np.ndarray:
