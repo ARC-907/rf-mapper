@@ -15,9 +15,16 @@ node_modules/
 
 # Runtime output — never ship
 logs/
+outputs/
+uploads/
+sessions/
 reports/stability_report_*
+reports/stability_metrics_*
 **/runtime/
 **/output/
+
+# Stray directory materialized by a str()-coerced mock in older test runs
+MagicMock/
 
 # === Cruft prevention (per STRUCTURE.md, non-optional) ===
 internal-planning/
@@ -28,7 +35,10 @@ productization-plan/
 .wrangler/
 archive/
 legacy/
-tools/
+tools/*
+# Exception: the dependency validation script is part of the build gate
+# (tests/test_build.py and tests/test_build_scripts.py load it).
+!tools/validate_dependencies.py
 pre-publish-grep.ps1
 pre-publish-grep.sh
 audit-fix.ps1

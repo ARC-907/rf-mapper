@@ -1,4 +1,0 @@
-include README.md
-recursive-include src/sim_rf_map/static *
-recursive-include src/sim_rf_map/field_gui/static *
-recursive-include tiles *

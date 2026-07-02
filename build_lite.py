@@ -135,13 +135,14 @@ def build():
     else:
         logger.warning("Failed to generate stability report, but continuing with build.")
 
-    # Run PyInstaller
+    # Run PyInstaller through the current interpreter so the build works
+    # without the venv's Scripts directory on PATH.
     try:
         logger.info("Running PyInstaller with light.spec...")
         result = subprocess.run(
-            ["pyinstaller", "light.spec"], 
-            check=True, 
-            capture_output=True, 
+            [sys.executable, "-m", "PyInstaller", "light.spec"],
+            check=True,
+            capture_output=True,
             text=True
         )
         logger.info("PyInstaller completed successfully.")

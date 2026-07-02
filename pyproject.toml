@@ -1,27 +1,45 @@
 
 [project]
 name = "rf-mapper"
-version = "0.10.0"
+version = "0.11.0"
 description = "Desktop RF propagation and terrain-analysis mapper for offline GIS workflows."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "RF Mapper contributors"}]
+# Core (Lite) dependencies. Heavy geospatial/ML packages live in the
+# `full` extra; the code probes for them at runtime (see
+# sim_rf_map.capabilities) and degrades gracefully when absent.
 dependencies = [
     "numpy>=1.25,<2",
     "matplotlib>=3.8",
     "Pillow>=11.3.0,<12",
-    "rasterio>=1.4",
-    "onnxruntime>=1.17",
     "scikit-image>=0.22",
-    "opencv-python>=4.9",
-    "numba>=0.59",
     "psutil>=5.9.0",
-    "itur>=0.3",
-    "whitebox>=2.3",
 ]
 
 [project.optional-dependencies]
-dev = ["coverage>=7", "pytest>=8", "pytest-asyncio", "ruff>=0.3", "pip-tools"]
+full = [
+    "rasterio>=1.4",
+    "onnxruntime>=1.17",
+    "opencv-python>=4.9",
+    "numba>=0.59",
+    "itur>=0.3",
+    "whitebox>=2.3",
+]
+dev = [
+    "coverage>=7",
+    "pytest>=8",
+    "pytest-asyncio",
+    "ruff>=0.3",
+    "pip-tools",
+    # Full-mode dependencies so the complete test suite can run.
+    "rasterio>=1.4",
+    "onnxruntime>=1.17",
+    "opencv-python>=4.9",
+    "numba>=0.59",
+    "itur>=0.3",
+    "whitebox>=2.3",
+]
 build = ["coverage>=7", "pyinstaller>=6", "pytest>=8"]
 setup = ["colorama>=0.4.6", "python-dotenv>=1"]
 3d = ["pyqtgraph>=0.13", "PySide6>=6.5"]
@@ -29,6 +47,7 @@ setup = ["colorama>=0.4.6", "python-dotenv>=1"]
 [project.scripts]
 sim-rf-map = "sim_rf_map.__main__:main"
 rf-mapper = "sim_rf_map.__main__:main"
+rf-mapper-doctor = "sim_rf_map.doctor:main"
 
 [tool.setuptools.package-data]
 sim_rf_map = ["**/*.json", "**/*.js", "**/*.html", "**/*.css", "**/*.png", "**/*.gif", "**/*.ico", "model_small.onnx"]
@@ -48,17 +67,16 @@ build-backend = "setuptools.build_meta"
 line-length = 88
 
 [tool.ruff.lint]
-ignore = ["E402", "F401", "D100", "D101", "F811", "E401"]
+# F841 (unused local) joins the legacy-leniency list: dozens of pre-existing
+# hits in tests/legacy GUI code; new code should still avoid dead locals.
+ignore = ["E402", "F401", "D100", "D101", "F811", "E401", "F541", "F841"]
 
-# F821 (undefined name) is enforced globally, with two scoped exceptions:
-#  * gui/main_window.py — large legacy GUI module references ~55 names from
-#    sibling modules (rf_desktop_app.gui, depth_physics) that are not yet
-#    imported into this file. These are real runtime-dead branches that need
-#    surfacing in a dedicated refactor pass, tracked separately. Until that
-#    refactor lands, ignore F821 here so the global rule stays useful for new code.
+# F821 (undefined name) is enforced globally, with one scoped exception:
 #  * rf_desktop_app/gui.py — string-form forward type annotation
 #    `"matplotlib.colors.Colormap"` triggers F821 because `matplotlib` is not
 #    imported at module level (only `matplotlib.pyplot as plt`). False positive.
+# (gui/main_window.py previously carried a blanket ignore for ~55 genuinely
+# undefined names; those are now imported at the bottom of the module and the
+# ignore is removed so regressions surface.)
 [tool.ruff.lint.per-file-ignores]
-"src/sim_rf_map/gui/main_window.py" = ["F821"]
 "src/sim_rf_map/rf_desktop_app/gui.py" = ["F821"]

@@ -172,7 +172,7 @@ class ColoredConsoleFormatter(logging.Formatter):
                 import ctypes
                 kernel32 = ctypes.windll.kernel32
                 kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
-            except:
+            except Exception:
                 # If ANSI colors aren't supported, use plain formatting
                 return super().format(record)
 

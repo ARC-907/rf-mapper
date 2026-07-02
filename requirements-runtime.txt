@@ -1,12 +1,15 @@
-# Runtime dependencies only
+# Core (Lite) runtime dependencies. Full-mode extras: pip install ".[full]"
 numpy>=1.25,<2
 matplotlib>=3.8
 Pillow>=11.3.0,<12
-rasterio>=1.4
-onnxruntime>=1.17; sys_platform != "emscripten" and platform_machine != "wasm32"
 scikit-image>=0.22
-opencv-python>=4.9
-numba>=0.59
 psutil>=5.9.0
-itur>=0.3
-whitebox>=2.3
+
+# Full-mode optional dependencies (mirror of the `full` extra in
+# pyproject.toml); the app detects and degrades gracefully without them.
+# rasterio>=1.4
+# onnxruntime>=1.17; sys_platform != "emscripten" and platform_machine != "wasm32"
+# opencv-python>=4.9
+# numba>=0.59
+# itur>=0.3
+# whitebox>=2.3

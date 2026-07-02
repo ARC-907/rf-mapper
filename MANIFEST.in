@@ -1,5 +1,3 @@
 include README.md
-include weights/model_small.onnx
-include model_small.onnx
-recursive-include src/sim_rf_map/static *
-recursive-include src/sim_rf_map/field_gui/static *
+include requirements-runtime.txt
+recursive-include src/sim_rf_map/assets *

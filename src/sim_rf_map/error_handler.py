@@ -190,7 +190,7 @@ def catch_errors(func: Callable = None, show_dialog: bool = True, module: str = 
                         if kwargs_str:
                             params.append(kwargs_str)
                         context += f" with args: ({', '.join(params)})"
-                except:
+                except Exception:
                     # If argument formatting fails, just use the function name
                     pass
 

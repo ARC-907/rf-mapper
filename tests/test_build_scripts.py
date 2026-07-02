@@ -8,9 +8,11 @@ from pathlib import Path
 import tempfile
 import shutil
 
-# Mock modules that might be imported by the tested modules
+# Mock modules that might be imported by the tested modules.
+# The build scripts probe `__import__("PyInstaller")` (canonical casing), so
+# the mock must be registered under that exact name.
 sys.modules['coverage'] = MagicMock()
-sys.modules['pyinstaller'] = MagicMock()
+sys.modules['PyInstaller'] = MagicMock()
 
 
 class TestBuildScripts(unittest.TestCase):
@@ -65,9 +67,9 @@ class TestBuildScripts(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(os.environ.get("ONYX_MODE"), "lite")
         mock_run.assert_called_once_with(
-            ["pyinstaller", "light.spec"], 
-            check=True, 
-            capture_output=True, 
+            [sys.executable, "-m", "PyInstaller", "light.spec"],
+            check=True,
+            capture_output=True,
             text=True
         )
         # Verify that exists was called at least once
@@ -107,9 +109,9 @@ class TestBuildScripts(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(os.environ.get("ONYX_MODE"), "full")
         mock_run.assert_called_once_with(
-            ["pyinstaller", "full.spec"], 
-            check=True, 
-            capture_output=True, 
+            [sys.executable, "-m", "PyInstaller", "full.spec"],
+            check=True,
+            capture_output=True,
             text=True
         )
         # Verify that exists was called at least once
@@ -128,7 +130,7 @@ class TestBuildScripts(unittest.TestCase):
         mock_exists.return_value = False  # Spec file doesn't exist
 
         # Mock pyinstaller import
-        sys.modules['pyinstaller'] = MagicMock()
+        sys.modules['PyInstaller'] = MagicMock()
 
         # Import the module
         spec = importlib.util.spec_from_file_location("build_lite", build_lite_path)
@@ -157,7 +159,7 @@ class TestBuildScripts(unittest.TestCase):
         mock_exists.return_value = False  # Spec file doesn't exist
 
         # Mock pyinstaller import
-        sys.modules['pyinstaller'] = MagicMock()
+        sys.modules['PyInstaller'] = MagicMock()
 
         # Import the module
         spec = importlib.util.spec_from_file_location("build_full", build_full_path)
@@ -188,7 +190,7 @@ class TestBuildScripts(unittest.TestCase):
         mock_run.side_effect = subprocess.CalledProcessError(1, "pyinstaller", stderr="PyInstaller error")
 
         # Mock pyinstaller import
-        sys.modules['pyinstaller'] = MagicMock()
+        sys.modules['PyInstaller'] = MagicMock()
 
         # Import the module
         spec = importlib.util.spec_from_file_location("build_lite", build_lite_path)
@@ -221,7 +223,7 @@ class TestBuildScripts(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stdout="Build successful", stderr="")
 
         # Mock pyinstaller import
-        sys.modules['pyinstaller'] = MagicMock()
+        sys.modules['PyInstaller'] = MagicMock()
 
         # Mock sim_rf_map.stability_metrics module
         mock_stability_metrics = MagicMock()

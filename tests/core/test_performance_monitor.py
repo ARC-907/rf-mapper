@@ -247,10 +247,11 @@ class TestPerformanceMonitor:
         
         # Finish the rendering
         total_time = renderer.finish()
-        
-        # Check that total time is reasonable
-        assert total_time > 0
-    
+
+        # Check that total time is reasonable (can be exactly 0.0 within the
+        # Windows clock resolution on fast machines)
+        assert total_time >= 0
+
     def test_progressive_renderer_with_callback(self):
         """Test the ProgressiveRenderer class with a callback function."""
         # Create a mock callback
