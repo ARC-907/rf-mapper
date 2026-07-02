@@ -123,7 +123,7 @@ def build():
     try:
         logger.info("Running PyInstaller with full.spec...")
         result = subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "full.spec"],
+            [sys.executable, "-m", "PyInstaller", "-y", "full.spec"],
             check=True,
             capture_output=True,
             text=True

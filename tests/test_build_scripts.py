@@ -67,7 +67,7 @@ class TestBuildScripts(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(os.environ.get("ONYX_MODE"), "lite")
         mock_run.assert_called_once_with(
-            [sys.executable, "-m", "PyInstaller", "light.spec"],
+            [sys.executable, "-m", "PyInstaller", "-y", "light.spec"],
             check=True,
             capture_output=True,
             text=True
@@ -109,7 +109,7 @@ class TestBuildScripts(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(os.environ.get("ONYX_MODE"), "full")
         mock_run.assert_called_once_with(
-            [sys.executable, "-m", "PyInstaller", "full.spec"],
+            [sys.executable, "-m", "PyInstaller", "-y", "full.spec"],
             check=True,
             capture_output=True,
             text=True

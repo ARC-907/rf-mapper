@@ -123,7 +123,7 @@ def build():
     try:
         logger.info("Running PyInstaller with light.spec...")
         result = subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "light.spec"],
+            [sys.executable, "-m", "PyInstaller", "-y", "light.spec"],
             check=True,
             capture_output=True,
             text=True
