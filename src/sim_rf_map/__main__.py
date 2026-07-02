@@ -34,13 +34,24 @@ def main() -> int:
 
     try:
         if len(sys.argv) == 1:
-            # No arguments provided, launch GUI mode
-            log_startup_diagnostic("mode_selection", "info", "No arguments provided, launching GUI mode")
+            # No arguments provided, launch GUI mode. The runtime mode comes
+            # from the deterministic selector (ONYX_MODE env var, default
+            # "full") so `rf-mapper` and `python -m sim_rf_map.main` agree.
+            from sim_rf_map.mode_selector import choose_mode
+
+            mode = choose_mode()
+            log_startup_diagnostic(
+                "mode_selection", "info",
+                f"No arguments provided, launching GUI in {mode} mode"
+            )
 
             # Check if GUI is available
             try:
                 with CrashHandler(component="gui_import"):
-                    from sim_rf_map.rf_desktop_app import launch_gui
+                    if mode == "lite":
+                        from sim_rf_map.rf_desktop_app_lite import launch_app as launch_gui
+                    else:
+                        from sim_rf_map.rf_desktop_app_full import launch_app as launch_gui
                     register_optional_component("gui", True)
                     log_startup_diagnostic("gui_import", "success", "GUI module imported successfully")
             except ImportError as e:

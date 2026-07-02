@@ -2125,7 +2125,9 @@ class RFAnalyzerApp:
         self.power_var = self.tx_panel.tx_power_var
         self.height_var = self.tx_panel.tx_height_var
         tk.Label(entry_frame, text="Model").pack(side=tk.LEFT)
-        self.model_var = tk.StringVar(value="FSPL")
+        # Reuse the tab-page variable so both control generations stay live
+        # and consistent (rebinding here used to orphan the tabbed controls).
+        self.model_var = getattr(self, "model_var", None) or tk.StringVar(value="FSPL")
         model_menu = tk.OptionMenu(
             entry_frame, self.model_var, "FSPL", "Longwave", "Shortwave", "Cellular", "Satcom"
         )
@@ -2142,7 +2144,7 @@ class RFAnalyzerApp:
             "TIP: Choose the model that best matches your frequency band and environment."
         )
         tk.Label(entry_frame, text="Param").pack(side=tk.LEFT)
-        self.param_var = tk.StringVar()
+        self.param_var = getattr(self, "param_var", None) or tk.StringVar()
         param_entry = tk.Entry(entry_frame, width=6, textvariable=self.param_var)
         param_entry.pack(side=tk.LEFT, padx=5)
         Tooltip(
@@ -2163,7 +2165,7 @@ class RFAnalyzerApp:
             self.weather_gui = None
 
         tk.Label(entry_frame, text="DEM Source").pack(side=tk.LEFT)
-        self.dem_source_var = tk.StringVar(value="Fused")
+        self.dem_source_var = getattr(self, "dem_source_var", None) or tk.StringVar(value="Fused")
         dem_menu = tk.OptionMenu(entry_frame, self.dem_source_var, "Fused", "MiDaS", "Physics")
         dem_menu.pack(side=tk.LEFT, padx=5)
         Tooltip(
@@ -2344,7 +2346,7 @@ class RFAnalyzerApp:
             self._set_status("Running in Lite Mode – Advanced overlays disabled.")
 
         tk.Label(entry_frame, text="Overlay").pack(side=tk.LEFT)
-        self.overlay_select_var = tk.StringVar(value="Heatmap")
+        self.overlay_select_var = getattr(self, "overlay_select_var", None) or tk.StringVar(value="Heatmap")
         overlay_menu = tk.OptionMenu(
             entry_frame,
             self.overlay_select_var,
@@ -2369,7 +2371,7 @@ class RFAnalyzerApp:
             "When idle, the system performs background analysis and monitoring.",
         )
 
-        self.fresnel_var = tk.BooleanVar(value=True)
+        self.fresnel_var = getattr(self, "fresnel_var", None) or tk.BooleanVar(value=True)
         fresnel_cb = tk.Checkbutton(
             entry_frame,
             text="Fresnel Pulse",
@@ -2381,7 +2383,7 @@ class RFAnalyzerApp:
             "Animate a Fresnel zone pulse overlay during propagation replay.",
         )
 
-        self.physics_var = tk.BooleanVar(value=False)
+        self.physics_var = getattr(self, "physics_var", None) or tk.BooleanVar(value=False)
         physics_cb = tk.Checkbutton(
             entry_frame,
             text="High Physics Simulation",
@@ -2393,7 +2395,7 @@ class RFAnalyzerApp:
             "Enable advanced propagation with refraction, interference, fresnel zones, and knife edge diffraction.",
         )
 
-        self.signal_cones_var = tk.BooleanVar(value=False)
+        self.signal_cones_var = getattr(self, "signal_cones_var", None) or tk.BooleanVar(value=False)
         cones_cb = tk.Checkbutton(
             entry_frame,
             text="Show Signal Cones",
@@ -2637,6 +2639,28 @@ class RFAnalyzerApp:
         root.bind("<Down>", lambda e: self.pan_canvas(0, 10))
         root.bind("<Tab>", lambda e: self._toggle_before_after())
 
+        # Surface optional-capability status instead of degrading silently.
+        self._report_optional_capabilities()
+
+    def _report_optional_capabilities(self) -> None:
+        """Show how many optional features are unavailable and log details."""
+        try:
+            from sim_rf_map.capabilities import get_capabilities, summary_lines
+
+            caps = get_capabilities()
+            unavailable = [r for r in caps.details.values() if r]
+            for line in summary_lines(caps):
+                logging.info("capability: %s", line)
+            if unavailable:
+                self._set_status(
+                    f"Ready. {len(unavailable)} optional feature(s) unavailable - "
+                    "run rf-mapper-doctor for details."
+                )
+            else:
+                self._set_status("Ready. All optional features available.")
+        except Exception:  # pragma: no cover - status line is best-effort
+            logging.exception("capability probe failed")
+
     def hash_settings(self) -> str:
         if hasattr(self, "settings") and not hasattr(self, "model_var"):
             return hashlib.md5(str(sorted(self.settings.items())).encode()).hexdigest()
@@ -2765,6 +2789,7 @@ class RFAnalyzerApp:
             self.undo_stack.append(mask.copy())
             self.redo_stack.clear()
             r = self.brush_var.get() // 2
+            img_w, img_h = self.image.size
             y0 = max(y - r, 0)
             y1 = min(y + r + 1, img_h)
             x0 = max(x - r, 0)
@@ -2838,6 +2863,7 @@ class RFAnalyzerApp:
         self.undo_stack.append(mask.copy())
         self.redo_stack.clear()
         r = self.brush_var.get() // 2
+        img_w, img_h = self.image.size
         y0 = max(y - r, 0)
         y1 = min(y + r + 1, img_h)
         x0 = max(x - r, 0)
@@ -2862,6 +2888,7 @@ class RFAnalyzerApp:
         self.undo_stack.append(mask.copy())
         self.redo_stack.clear()
         r = self.brush_var.get() // 2
+        img_w, img_h = self.image.size
         y0 = max(y - r, 0)
         y1 = min(y + r + 1, img_h)
         x0 = max(x - r, 0)
@@ -3392,14 +3419,14 @@ class RFAnalyzerApp:
             messagebox.showwarning("RF Analyzer", "No DEM available")
             return
         with self.busy_feedback("Exporting DEM..."):
-            img = Image.fromarray(self.dem.astype("float32"))
+            # PIL.Image and numpy are module-level imports; a former local
+            # re-import here shadowed `Image` and made line one an
+            # UnboundLocalError (DEM export always failed).
             Path("outputs").mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_png = Path("outputs") / f"dem_{ts}.png"
-            from PIL import Image
-            import numpy as np
 
-            img_array = np.array(img)
+            img_array = np.asarray(self.dem, dtype="float32")
             if img_array.dtype == np.float32 or img_array.dtype == np.float64:
                 scaled = np.clip((img_array / img_array.max()) * 255, 0, 255).astype(np.uint8)
                 img = Image.fromarray(scaled, mode="L")
@@ -3713,6 +3740,41 @@ class RFAnalyzerApp:
             return
         self.canvas.xview_scroll(dx, "units")
         self.canvas.yview_scroll(dy, "units")
+
+
+# Analysis/utility functions used inside RFAnalyzerApp handlers and main().
+# Imported at the bottom of the module on purpose: rf_desktop_app.gui imports
+# RFAnalyzerApp from this module, so a top-of-file import here would be
+# circular. Method bodies resolve these globals at call time, and by the time
+# either module finishes importing, both directions are satisfied. (Before
+# this block existed, every one of these names was undefined at runtime and
+# Open/Analyze/Export crashed with NameError.)
+from sim_rf_map.rf_desktop_app.gui import (  # noqa: E402
+    _smooth,
+    advanced_constant,
+    analyze_sun_shadow,
+    apply_refraction,
+    build_dem_iterative,
+    cache_file,
+    compute_dead_zone,
+    compute_hazard,
+    compute_los,
+    compute_los_diffraction,
+    create_colorbar,
+    discriminate_water_veg,
+    fspl,
+    generate_deadzone_map,
+    generate_heatmap,
+    infer_dem_from_shading,
+    load_input,
+    make_translucent_mask,
+    map_display_to_image,
+    multipath_loss,
+    save_overlay_georef,
+    vegetation_loss,
+    water_loss,
+    weather_loss,
+)
 
 
 def main() -> None:

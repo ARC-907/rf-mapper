@@ -44,6 +44,9 @@ else:
 from ..tooltip import Tooltip
 from sim_rf_map.utils.meta_writer import write_meta_for
 from sim_rf_map.env_mode import IS_LITE
+from sim_rf_map import paths
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 from PIL import Image, ImageTk, ImageDraw
@@ -205,10 +208,10 @@ def infer_dem_from_shading(rgb: np.ndarray, calib: dict | None = None) -> np.nda
 
 
 def fspl(freq_mhz: float, dist_m: np.ndarray) -> np.ndarray:
-    """Free-space path loss in dB using vectorized math."""
-    with np.errstate(divide="ignore"):
-        log_dist = np.log10(np.maximum(dist_m, 0.001))
-    return 32.45 + 20.0 * np.log10(freq_mhz) + 20.0 * log_dist
+    """Free-space path loss in dB (canonical ITU-R P.525 form, vectorized)."""
+    from sim_rf_map.rf.propagation import free_space_path_loss_db
+
+    return free_space_path_loss_db(dist_m, freq_mhz * 1e6, min_distance_m=0.001)
 
 
 def create_colorbar(
@@ -439,51 +442,13 @@ def knife_edge_loss(h: float) -> float:
     return max(0.0, h * 0.2)
 
 
-def knife_edge_loss_nu(nu: float) -> float:
-    """Compute diffraction loss from Fresnel nu parameter."""
-    if nu <= -0.78:
-        return 0.0
-    return 6.9 + 20 * np.log10(np.sqrt((nu - 0.1) ** 2 + 1) + nu - 0.1)
-
-
-def profile_elevation(
-    dem: np.ndarray, a: tuple[int, int], b: tuple[int, int]
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return distances and heights along line from ``a`` to ``b``."""
-    y0, x0 = a
-    y1, x1 = b
-    n = int(max(abs(y1 - y0), abs(x1 - x0))) + 1
-    ys = np.linspace(y0, y1, n)
-    xs = np.linspace(x0, x1, n)
-    xs = np.clip(xs.astype(int), 0, dem.shape[1] - 1)
-    ys = np.clip(ys.astype(int), 0, dem.shape[0] - 1)
-    heights = dem[ys, xs]
-    dists = np.hypot(xs - x0, ys - y0)
-    return dists, heights
-
-
-def knife_edge_diffraction(
-    dem: np.ndarray,
-    a: tuple[int, int],
-    b: tuple[int, int],
-    freq_mhz: float,
-    scale: float = 1.0,
-) -> float:
-    """Return diffraction loss in dB along path ``a`` -> ``b``."""
-    lamb = 300 / freq_mhz
-    dists, heights = profile_elevation(dem, a, b)
-    line = heights[0] + (heights[-1] - heights[0]) * (dists / dists[-1])
-    h_diff = heights - line
-    idx = np.argmax(h_diff)
-    h = h_diff[idx] * scale
-    if h <= 0:
-        return 0.0
-    d1 = dists[idx] * scale
-    d2 = (dists[-1] - dists[idx]) * scale
-    if d1 == 0 or d2 == 0:
-        return 0.0
-    nu = h * np.sqrt(2 * (d1 + d2) / (lamb * d1 * d2))
-    return knife_edge_loss_nu(nu)
+# Canonical implementations live in GUI-free modules; re-exported here for
+# backward compatibility with existing imports.
+from sim_rf_map.knife_edge import knife_edge_loss_nu  # noqa: E402
+from sim_rf_map.terrain_los import (  # noqa: E402
+    profile_elevation,
+    knife_edge_diffraction,
+)
 
 
 def multipath_loss(
@@ -505,12 +470,13 @@ def multipath_loss(
     return 10 * np.log10(1 + (extra / straight))
 
 
-def apply_refraction(dem: np.ndarray, k_factor: float = 4.0 / 3.0) -> np.ndarray:
-    """Return DEM adjusted for Earth curvature refraction."""
-    rows, cols = dem.shape
-    Y, X = np.meshgrid(np.arange(cols), np.arange(rows))
-    range_m = np.hypot(X - X.mean(), Y - Y.mean())
-    return dem - range_m / k_factor
+def apply_refraction(
+    dem: np.ndarray, k_factor: float = 4.0 / 3.0, resolution_m: float = 1.0
+) -> np.ndarray:
+    """Return DEM adjusted for effective-earth curvature (d^2 / 2kRe)."""
+    from sim_rf_map.physics.refraction import apply_earth_curvature
+
+    return apply_earth_curvature(dem, resolution_m=resolution_m, k_factor=k_factor)
 
 
 def advanced_constant(model: str, param: str = "") -> float:
@@ -539,55 +505,10 @@ def weather_loss(cloud: str, precip: str, temp: float, humidity: float, freq_mhz
     return float(loss)
 
 
-def compute_los_diffraction(
-    dem: np.ndarray,
-    tx: tuple[int, int],
-    freq_mhz: float,
-    scale: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return LOS mask and diffraction loss map."""
-    rows, cols = dem.shape
-    mask = np.ones((rows, cols), dtype="uint8")
-    diff = np.zeros((rows, cols), dtype=float)
-    tx_y, tx_x = tx
-    for y in range(rows):
-        for x in range(cols):
-            if y == tx_y and x == tx_x:
-                continue
-            loss = knife_edge_diffraction(dem, tx, (y, x), freq_mhz, scale)
-            diff[y, x] = loss
-            mask[y, x] = 0 if loss > 0 else 1
-    tx_y = min(tx_y, mask.shape[0] - 1)
-    tx_x = min(tx_x, mask.shape[1] - 1)
-    mask[tx_y, tx_x] = 1
-    return mask, diff
+from sim_rf_map.terrain_los import compute_los_diffraction  # noqa: E402
 
 
-def compute_los(dem: np.ndarray, tx: tuple[int, int]) -> np.ndarray:
-    """Return line-of-sight mask (1=clear, 0=blocked)."""
-    rows, cols = dem.shape
-    mask = np.ones((rows, cols), dtype="uint8")
-    tx_y, tx_x = tx
-    tx_h = dem[tx_y, tx_x]
-
-    def blocked(x1: int, y1: int) -> bool:
-        n = max(abs(x1 - tx_x), abs(y1 - tx_y))
-        for t in np.linspace(0.0, 1.0, n + 1)[1:-1]:
-            x = int(round(tx_x + (x1 - tx_x) * t))
-            y = int(round(tx_y + (y1 - tx_y) * t))
-            z_line = tx_h + (dem[y1, x1] - tx_h) * t
-            if dem[y, x] > z_line:
-                return True
-        return False
-
-    for y in range(rows):
-        for x in range(cols):
-            if blocked(x, y):
-                mask[y, x] = 0
-    tx_y = min(tx_y, mask.shape[0] - 1)
-    tx_x = min(tx_x, mask.shape[1] - 1)
-    mask[tx_y, tx_x] = 1
-    return mask
+from sim_rf_map.terrain_los import compute_los  # noqa: E402
 
 
 def generate_heatmap(
@@ -616,25 +537,29 @@ def make_translucent_mask(mask: np.ndarray, color: tuple[int, int, int, int]) ->
     return overlay
 
 
-def cache_file(path: Path, folder: str) -> Path:
+def cache_file(path: Path, folder: str | Path | None = None) -> Path:
     """Copy ``path`` into ``folder`` with timestamp."""
-    Path(folder).mkdir(parents=True, exist_ok=True)
+    resolved_folder = Path(folder) if folder is not None else paths.get_outputs_dir()
+    resolved_folder.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest = Path(folder) / f"{path.stem}_{ts}{path.suffix}"
+    dest = resolved_folder / f"{path.stem}_{ts}{path.suffix}"
     Image.open(path).save(dest)
     return dest
 
 
-def save_overlay(img: Image.Image, out_dir: str = "outputs") -> Path:
+def save_overlay(img: Image.Image, out_dir: str | Path | None = None) -> Path:
     """Save overlay PNG with timestamp."""
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    resolved_dir = Path(out_dir) if out_dir is not None else paths.get_outputs_dir()
+    resolved_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out = Path(out_dir) / f"overlay_{ts}.png"
+    out = resolved_dir / f"overlay_{ts}.png"
     img.save(out)
     return out
 
 
-def save_overlay_georef(img: Image.Image, georef: dict | None, out_dir: str = "outputs") -> Path:
+def save_overlay_georef(
+    img: Image.Image, georef: dict | None, out_dir: str | Path | None = None
+) -> Path:
     """Save overlay with optional georeferencing."""
     out = save_overlay(img, out_dir)
     if georef and rasterio:
@@ -652,6 +577,8 @@ def save_overlay_georef(img: Image.Image, georef: dict | None, out_dir: str = "o
         with rasterio.open(tif_out, "w", **meta) as dst:
             dst.write(arr.transpose(2, 0, 1))
         out = tif_out
+    elif georef and not rasterio:
+        logger.warning("GeoTIFF export skipped: rasterio not installed")
     return out
 
 

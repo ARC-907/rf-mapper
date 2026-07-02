@@ -27,19 +27,23 @@ from sim_rf_map.rf_desktop_app import (
     create_colorbar,
     cache_file,
     save_overlay_georef,
-    compute_los,
     compute_dead_zone,
     map_display_to_image,
 )
-from sim_rf_map.voxelizer import generate_voxel_volume
-from sim_rf_map.propagation.high_physics import simulate_high_physics_rf
+from sim_rf_map.propagation.high_physics import simulate_basic_rf
+from sim_rf_map.terrain_los import compute_los
+from sim_rf_map import paths
+
+# Analysis grids larger than this (longest side) are downsampled so Lite
+# stays fast on field hardware; the loss map is upscaled for display.
+_LITE_MAX_ANALYSIS_DIM = 200
 
 
 class RFAnalyzerLite:
     def __init__(self, root: tk.Tk) -> None:
         logging.info("Initializing RFAnalyzerLite application")
         self.root = root
-        self.root.title("SparkMind RF – Field Edition (ONIX Enabled)")
+        self.root.title("RF Mapper – Lite Edition")
 
         # Set a better default window size (1024x768)
         screen_width = root.winfo_screenwidth()
@@ -135,8 +139,9 @@ class RFAnalyzerLite:
         # Store zoom level
         self.zoom_level = 1.0
 
-        default_dem = Path("field/dem.tif")
-        default_tx = Path("field/tx.json")
+        field_dir = paths.get_field_dir()
+        default_dem = field_dir / "dem.tif"
+        default_tx = field_dir / "tx.json"
         if default_dem.exists() and default_tx.exists():
             self._field_auto_run(str(default_dem), str(default_tx))
 
@@ -281,16 +286,42 @@ class RFAnalyzerLite:
             messagebox.showerror("Error", "Place at least one transmitter.")
             return
 
-        self._set_status("Running field-grade analysis...")
+        self._set_status("Running Lite analysis (free-space + line of sight)...")
         logging.info(f"Analysis parameters: {len(self.txs)} transmitters, image size: {self.image.size}")
 
+        # Lite keeps analysis fast: downsample large grids, run the basic
+        # free-space model plus a line-of-sight penalty, then upscale. The
+        # Full edition runs the complete high-physics stack.
         self._update_loadbar(0.1)
-        logging.info("Generating voxel volume")
-        self.voxel_volume = generate_voxel_volume(self.dem, {"scale": 2, "passes": 6})
+        scale = max(1, max(self.dem.shape) // _LITE_MAX_ANALYSIS_DIM)
+        dem_small = self.dem[::scale, ::scale]
+        txs_small = [
+            {**tx, "x": int(tx["x"]) // scale, "y": int(tx["y"]) // scale}
+            for tx in self.txs
+        ]
+        for tx in txs_small:
+            tx["x"] = int(np.clip(tx["x"], 0, dem_small.shape[1] - 1))
+            tx["y"] = int(np.clip(tx["y"], 0, dem_small.shape[0] - 1))
 
         self._update_loadbar(0.3)
-        logging.info("Simulating high physics RF propagation")
-        loss = simulate_high_physics_rf(self.dem, self.txs)
+        logging.info("Simulating free-space RF propagation (Lite)")
+        loss_small = simulate_basic_rf(dem_small, txs_small, resolution_m=30.0 * scale)
+
+        # Terrain line-of-sight: blocked cells get a fixed obstruction
+        # penalty (approximate; the Full edition uses knife-edge math).
+        blocked = np.ones_like(dem_small, dtype=bool)
+        for tx in txs_small:
+            los = compute_los(dem_small, (tx["y"], tx["x"]))
+            blocked &= los == 0
+        loss_small = loss_small + blocked.astype("float32") * 20.0
+
+        if scale > 1:
+            loss_img = Image.fromarray(loss_small.astype("float32"), mode="F")
+            loss = np.array(
+                loss_img.resize((self.dem.shape[1], self.dem.shape[0]), Image.BILINEAR)
+            )
+        else:
+            loss = loss_small
 
         # Store the loss data for later use (e.g., when changing colormap)
         self.loss = loss
@@ -518,11 +549,34 @@ class RFAnalyzerLite:
 
 
 def launch_app() -> None:
-    """Launch Lite mode through the shared desktop application surface."""
-    logging.info("Launching RF Mapper Lite through the shared desktop application")
-    from sim_rf_map.gui.main_window import launch_gui
+    """Launch the reduced Lite window (RFAnalyzerLite).
 
-    launch_gui()
+    Lite is a genuinely smaller surface: Open / Analyze / Remove TX /
+    Export, a colormap picker, zoom keys, and field auto-run — not the
+    Full window with hidden buttons.
+    """
+    logging.info("Launching RF Mapper Lite (field edition)")
+    root = tk.Tk()
+    app = RFAnalyzerLite(root)
+
+    # Surface optional-capability status without blocking startup.
+    try:
+        from sim_rf_map.capabilities import get_capabilities
+
+        caps = get_capabilities()
+        missing = [reason for reason in caps.details.values() if reason]  # noqa: F841
+        if missing:
+            app._set_status(
+                f"Ready (Lite). {len(missing)} optional feature(s) unavailable - "
+                "run rf-mapper-doctor for details."
+            )
+        else:
+            app._set_status("Ready (Lite).")
+    except Exception:  # pragma: no cover - status line is best-effort
+        app._set_status("Ready (Lite).")
+
+    app.refresh()
+    root.mainloop()
 
 
 if __name__ == "__main__":
