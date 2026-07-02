@@ -3,8 +3,7 @@ import subprocess
 import sys
 import logging
 from pathlib import Path
-import pytest
-import coverage
+import re
 from sim_rf_map.stability_metrics import generate_stability_report
 
 # Configure logging
@@ -30,59 +29,43 @@ def check_dependencies():
         return False
 
 def run_tests_with_coverage():
-    """Run tests and check coverage before building."""
-    logger.info("Running tests with coverage...")
+    """Run the test suite under coverage in a subprocess.
 
-    # Create a coverage object
-    cov = coverage.Coverage(source=['src/sim_rf_map'])
+    A subprocess keeps GUI (tkinter) test state out of the build process:
+    running pytest in-process left Tcl objects whose teardown aborted the
+    interpreter after the suite finished.
+    """
+    logger.info("Running tests with coverage (subprocess)...")
 
     try:
-        # Start coverage measurement
-        cov.start()
+        result = subprocess.run(
+            [sys.executable, "-m", "coverage", "run", "--source=src/sim_rf_map",
+             "-m", "pytest", "tests", "-q"],
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout:
+            logger.info(result.stdout.strip().splitlines()[-1])
 
-        # Run tests
-        logger.info("Running pytest...")
-        result = pytest.main(['tests'])
-
-        # Stop coverage measurement
-        cov.stop()
-
-        # Generate coverage report
-        cov.save()
-        cov.report()
-
-        # Get coverage percentage
-        coverage_data = cov.get_data()
-        total_lines = 0
-        covered_lines = 0
-
-        for filename in coverage_data.measured_files():
-            # Skip files in site-packages
-            if 'site-packages' in filename:
-                continue
-
-            try:
-                _, statements, _, missing_lines, _ = cov.analysis2(filename)
-            except coverage.CoverageException:
-                continue
-
-            total_lines += len(statements)
-            covered_lines += len(statements) - len(missing_lines)
-
-        if total_lines > 0:
-            coverage_percentage = (covered_lines / total_lines) * 100
-            logger.info(f"Test coverage: {coverage_percentage:.2f}%")
-
-            if coverage_percentage < 70:
-                logger.warning(
-                    f"Test coverage ({coverage_percentage:.2f}%) is below the portfolio target (70%). Continuing build."
-                )
+        coverage_percentage = 0.0
+        report = subprocess.run(
+            [sys.executable, "-m", "coverage", "report"],
+            capture_output=True,
+            text=True,
+        )
+        if report.returncode == 0 and report.stdout:
+            match = re.search(r"TOTAL\s+\d+\s+\d+\s+(\d+(?:\.\d+)?)%", report.stdout)
+            if match:
+                coverage_percentage = float(match.group(1))
+                logger.info(f"Test coverage: {coverage_percentage:.2f}%")
+                if coverage_percentage < 70:
+                    logger.warning(
+                        f"Test coverage ({coverage_percentage:.2f}%) is below the portfolio target (70%). Continuing build."
+                    )
         else:
-            logger.warning("No lines were measured for coverage.")
-            coverage_percentage = 0
+            logger.warning("No coverage report available.")
 
-        # Check if tests passed
-        if result != 0:
+        if result.returncode != 0:
             logger.error("Tests failed. Build aborted.")
             return False, coverage_percentage
 

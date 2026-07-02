@@ -238,8 +238,13 @@ class RFAnalyzerApp:
 
     def _set_status(self, message: str) -> None:
         """Update status bar message."""
-        if not hasattr(self, "status") and hasattr(self, "status_label"):
-            self.status_label.config(text=message)
+        if not hasattr(self, "status"):
+            if hasattr(self, "status_label"):
+                self.status_label.config(text=message)
+            else:
+                # Status widgets not built yet (early-__init__ callers, e.g.
+                # the Lite-mode notice); hold the message until they exist.
+                self._pending_status = message
             return
         self.status.set(message)
         self.root.update_idletasks()
@@ -2605,7 +2610,7 @@ class RFAnalyzerApp:
         self.status_frame = ttk.Frame(root, relief=tk.GROOVE, borderwidth=1)
         self.status_frame.pack(fill="x", side=tk.BOTTOM, padx=5, pady=2)
 
-        self.status = tk.StringVar(value="")
+        self.status = tk.StringVar(value=getattr(self, "_pending_status", ""))
         self.loadbar = tk.StringVar(value="[--------------------------------------------------]")
 
         ttk.Label(self.status_frame, textvariable=self.loadbar, anchor="w").pack(fill="x", side=tk.BOTTOM, padx=5)
