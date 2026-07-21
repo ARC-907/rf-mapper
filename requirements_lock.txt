@@ -105,7 +105,7 @@ packaging==24.2
     #   wheel
 pefile==2024.8.26
     # via pyinstaller
-pillow==11.3.0
+pillow==12.3.0
     # via
     #   -r requirements.txt
     #   imageio

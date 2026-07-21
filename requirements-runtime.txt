@@ -1,7 +1,7 @@
 # Core (Lite) runtime dependencies. Full-mode extras: pip install ".[full]"
 numpy>=1.25,<2
 matplotlib>=3.8
-Pillow>=11.3.0,<12
+Pillow>=11.3.0,<13
 scikit-image>=0.22
 psutil>=5.9.0
 
