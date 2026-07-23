@@ -165,7 +165,7 @@ scipy==1.15.3
     # via
     #   itur
     #   scikit-image
-setuptools==82.0.1
+setuptools==83.0.0
     # via
     #   pip-tools
     #   pyinstaller
