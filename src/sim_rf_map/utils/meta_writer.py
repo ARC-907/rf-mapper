@@ -1,7 +1,7 @@
 import json
 import hashlib
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def sha256_of_file(path: str) -> str:
@@ -17,7 +17,7 @@ def write_meta_for(path: str, context: dict) -> None:
         "file": out_path.name,
         "path": str(out_path.resolve()),
         "hash_sha256": sha256_of_file(path),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     meta.update(context)
     with open(out_path.with_suffix(out_path.suffix + ".meta.json"), "w", encoding="utf-8") as f:

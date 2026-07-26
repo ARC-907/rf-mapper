@@ -39,6 +39,11 @@ def free_space_path_loss_db(distance_m, frequency_hz, *, min_distance_m: float =
 
     d = np.maximum(np.asarray(distance_m, dtype=float), min_distance_m)
     loss = 20.0 * np.log10(_FOUR_PI_OVER_C * d * frequency_hz)
+    # Free-space path loss is non-negative. Below ~lambda/(4*pi) the closed
+    # form turns negative (the near-field regime, where this formula does not
+    # apply); floor at 0 dB so callers never see unphysical "gain" at cells
+    # right on top of the transmitter.
+    loss = np.maximum(loss, 0.0)
     if np.isscalar(distance_m) or np.ndim(distance_m) == 0:
         return float(loss)
     return loss

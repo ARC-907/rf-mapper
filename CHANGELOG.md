@@ -1,5 +1,30 @@
 # CHANGELOG
 
+## v0.11.1 - Runtime revival pass
+
+### Crash fixes (current dependency stack: matplotlib 3.10, Pillow 11, Python 3.12)
+- `create_colorbar` no longer crashes with `AttributeError: tostring_rgb` (removed in matplotlib 3.10). It now renders on an explicit `FigureCanvasAgg` via `buffer_rgba()` — backend-independent, thread-safe, and free of pyplot global state.
+- `refresh()` no longer raises `ValueError: images do not match` when blending the analysis overlay over the base image: the overlay (generated at reduced analysis resolution) is resized to the base image before `Image.blend`, matching the existing LoS-overlay idiom.
+
+### GUI layout repair
+- Completed the tab migration by deleting the legacy pre-notebook control strip (436 lines): every control existed twice — once inside the proper tab and once packed directly onto the root window — and the legacy copies clobbered the tab widgets' Tk variables, leaving the tabbed controls visually present but dead. The duplicated Transmitter Settings panel, the scattered bottom control row, and the dead tab controls are all gone.
+- Relocated the two controls that existed only in the legacy strip ("Show Interference Pattern", "Center on Dead Zones") into the Physics tab grid.
+- The dev overlay and diagnostic HUD now float over the map canvas corners instead of overlapping the notebook tab bar.
+- The main window opens at a sane initial size (`1400x900`, min `1100x700`) instead of deriving its geometry from widget-requested sizes.
+
+### Launchers, environment, and packaging
+- Regenerated `requirements.txt`: the previous lock pinned `numpy==1.25.2` (no Python 3.12 wheels exist), which broke every installer that consumed the file and would have downgraded a working environment. All pins now match the verified working stack.
+- Rewrote all five `.bat` entry points. They now `cd` to the script's own directory (double-click works from anywhere), pick a working interpreter (project `.venv` → `py` launcher → `python` on PATH), report errors and pause instead of flashing a window shut, and target modules that actually exist (`sim_rf_map.rf_desktop_app` lost its `__main__` in v0.11 but the dev menu still pointed at it).
+- `launch_app.bat` now launches the Full GUI by default (`launch_app.bat lite` for the Lite window) instead of silently launching Lite.
+- `dev_setup_launch.bat` no longer runs the legacy `dev_setup.py` (which references a retired Flask/S3/GDAL incarnation of the project and left `.venv` half-populated); it bootstraps `.venv` directly with `pip install -e ".[dev,build]"`.
+- `build_and_package.bat` no longer installs the requirements lock over your environment mid-build, guards its clean step, and stops with a message on failure.
+- Rebuilt the project `.venv` from scratch with the `dev` and `build` extras (the old one was empty, and a stale process from it was holding a file lock).
+
+### Hygiene
+- Export metadata sidecars use timezone-aware `datetime.now(timezone.utc)` (Python 3.12 `utcnow` deprecation).
+- Dropped the deprecated `mode=` argument to `Image.fromarray` (removal scheduled for Pillow 13).
+- The four silent `except: pass` blocks in render/export paths (overlay registration, Fresnel replay overlay, GeoTIFF load fallback, WhiteboxTools slope) now log warnings with tracebacks instead of masking failures.
+
 ## v0.11.0 - Engineering completion pass
 
 ### Core RF math foundation (new)

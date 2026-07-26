@@ -1,7 +1,7 @@
 
 [project]
 name = "rf-mapper"
-version = "0.11.0"
+version = "0.11.1"
 description = "Desktop RF propagation and terrain-analysis mapper for offline GIS workflows."
 readme = "README.md"
 requires-python = ">=3.10"

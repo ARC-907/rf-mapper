@@ -53,7 +53,10 @@ from PIL import Image, ImageTk, ImageDraw
 
 try:
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LightSource, LinearSegmentedColormap
+    from matplotlib.colors import LightSource, LinearSegmentedColormap, Normalize
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
 except Exception:  # pragma: no cover
     plt = None
     LightSource = None
@@ -192,7 +195,10 @@ def load_input(path: Path) -> tuple[np.ndarray, np.ndarray | None, dict | None]:
                 georef = {"transform": src.transform, "crs": src.crs}
                 return rgb, dem, georef
         except Exception:
-            pass
+            logger.warning(
+                "GeoTIFF load failed for %s; falling back to plain image load "
+                "(DEM and georeference will be unavailable)", path, exc_info=True,
+            )
     img = Image.open(path).convert("RGB")
     rgb = np.array(img).astype("float32")
     return rgb, None, georef
@@ -226,21 +232,22 @@ def create_colorbar(
     """Return a colorbar image using matplotlib with optional sizing."""
     if plt is None:
         return None
-    fig, ax = plt.subplots(figsize=(1, 2))
-    fig.subplots_adjust(left=0.5, right=0.8)
-    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    # Render on an explicit Agg canvas: backend-independent, thread-safe,
+    # and never registered with the pyplot state machine.
+    fig = Figure(figsize=(1, 2))
+    canvas = FigureCanvasAgg(fig)
+    ax = fig.add_axes([0.5, 0.05, 0.3, 0.9])
+    norm = Normalize(vmin=vmin, vmax=vmax)
     fig.colorbar(
-        plt.cm.ScalarMappable(norm=norm, cmap=cmap),
+        ScalarMappable(norm=norm, cmap=cmap),
         cax=ax,
         shrink=shrink,
         aspect=aspect,
         pad=pad,
     )
-    fig.canvas.draw()
-    w, h = fig.canvas.get_width_height()
-    img = Image.frombytes("RGB", (w, h), fig.canvas.tostring_rgb())
-    plt.close(fig)
-    return img
+    canvas.draw()
+    buf = np.asarray(canvas.buffer_rgba())
+    return Image.fromarray(buf[:, :, :3].copy())
 
 
 def compute_hazard(dem: np.ndarray, threshold: float = 40.0) -> np.ndarray:
@@ -438,7 +445,7 @@ def knife_edge_loss(h: float) -> float:
         try:
             wbt.slope("input_dem.tif", "output/slope.tif")
         except Exception:
-            pass
+            logger.warning("WhiteboxTools slope computation failed", exc_info=True)
     return max(0.0, h * 0.2)
 
 

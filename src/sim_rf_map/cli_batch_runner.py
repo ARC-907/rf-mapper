@@ -449,7 +449,7 @@ def main() -> int:
             from sim_rf_map.weather_model import WeatherConditions
             from sim_rf_map.wavefront_propagator import propagate_wavefront
             from sim_rf_map.voxelizer import voxelize_dem
-            from sim_rf_map.material_inference import classify_material, get_voxel_permeability
+            from sim_rf_map.material_inference import classify_material, voxel_permeability_3d
             from sim_rf_map.export_tools import export_loss_npy, export_loss_png
 
             log_startup_diagnostic("module_loading", "success", "Required modules loaded successfully")
@@ -480,14 +480,18 @@ def main() -> int:
             materials = load_resource("materials", classify_material, np.stack([dem] * 3, axis=2))
             log_startup_diagnostic("material_classification", "success", "Materials classified successfully")
 
-        # Optional component: permeability calculation
+        # Optional component: permeability calculation. Build a height-aware 3D
+        # volume (air above the terrain stays transparent) rather than
+        # broadcasting the 2D ground map to every altitude layer, which would
+        # mark the open sky solid and stop the wavefront at its origin.
         try:
             log_startup_diagnostic("permeability", "info", "Calculating voxel permeability")
-            perm2d = load_resource("permeability_2d", get_voxel_permeability, materials, optional=True)
+            permeability = load_resource(
+                "permeability_3d", voxel_permeability_3d, materials, voxels, optional=True
+            )
 
-            if perm2d is not None:
-                permeability = np.repeat(perm2d[None, :, :], voxels.shape[0], axis=0)
-                log_startup_diagnostic("permeability", "success", f"Permeability matrix created with shape: {permeability.shape}")
+            if permeability is not None:
+                log_startup_diagnostic("permeability", "success", f"Permeability volume created with shape: {permeability.shape}")
                 register_optional_component("permeability", True)
             else:
                 permeability = None

@@ -45,6 +45,15 @@ def test_fspl_array_input_and_clamping():
     assert loss[2] > loss[1]
 
 
+def test_fspl_floored_at_zero_in_near_field():
+    # Below ~lambda/(4*pi) the closed form goes negative; path loss must never
+    # be reported as negative "gain" (regression for +82 dBm RX on the TX cell).
+    near = free_space_path_loss_db(0.001, 900e6, min_distance_m=0.001)
+    assert near == pytest.approx(0.0)
+    arr = free_space_path_loss_db(np.array([0.001, 0.01, 1000.0]), 900e6, min_distance_m=0.001)
+    assert np.all(arr >= 0.0)
+
+
 def test_fspl_invalid_inputs():
     with pytest.raises(ValueError):
         free_space_path_loss_db(1000.0, 0.0)

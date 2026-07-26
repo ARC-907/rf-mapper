@@ -383,8 +383,8 @@ class RFAnalyzerApp:
             padx=5,
             pady=3,
         )
-        # Position on the right side of the screen
-        self.dev_overlay.place(relx=1.0, y=10, anchor="ne")
+        # Float over the bottom-left of the map canvas, clear of the tab bar
+        self.dev_overlay.place(x=10, rely=1.0, y=-40, anchor="sw")
         self.dev_overlay.place_forget()
         self._dev_frame_counter = 0
         self.last_analysis_time = 0.0
@@ -434,8 +434,8 @@ class RFAnalyzerApp:
             padx=5,
             pady=3,
         )
-        # Position on the right side of the screen below the dev overlay
-        self.diagnostic_overlay.place(relx=1.0, y=50, anchor="ne")
+        # Float over the bottom-right of the map canvas, clear of the controls
+        self.diagnostic_overlay.place(relx=1.0, x=-10, rely=1.0, y=-40, anchor="se")
         self._update_diagnostic_overlay()
 
     def _update_diagnostic_overlay(self) -> None:
@@ -695,7 +695,7 @@ class RFAnalyzerApp:
         data = (layer * 255).astype(np.uint8)
         rgb = np.stack([data] * 3, axis=-1)
         size = self.image.size if hasattr(self, "image") and self.image is not None else (layer.shape[1], layer.shape[0])
-        return Image.fromarray(rgb, mode="RGB").resize(size)
+        return Image.fromarray(rgb).resize(size)
 
     def _render_voxel_slice(self) -> None:
         if self.voxel_volume is None:
@@ -848,7 +848,7 @@ class RFAnalyzerApp:
 
                 frame = apply_fresnel_overlay(frame, self.txs)
             except Exception:
-                pass
+                logging.warning("Fresnel overlay failed during replay", exc_info=True)
         self._render_frame_to_canvas(frame)
         self.replay_index += 1
         self._replay_timer = self.root.after(42, self._next_replay_frame)
@@ -1068,6 +1068,11 @@ class RFAnalyzerApp:
         self.control_notebook.add(self.physics_tab, text="Physics")
         self.control_notebook.add(self.editing_tab, text="Editing")
         self.control_notebook.add(self.advanced_tab, text="Advanced")
+        # Size the controls notebook to its active tab so short tabs (e.g. File
+        # Operations) don't inherit the tallest tab's height and squeeze the
+        # image canvas below into a thin strip.
+        self.control_notebook.bind("<<NotebookTabChanged>>", self._resize_notebook_to_tab)
+        self.root.after(250, self._resize_notebook_to_tab)
 
         # Create frames for button groups
         self.button_frame = ttk.Frame(self.file_tab)
@@ -1773,6 +1778,25 @@ class RFAnalyzerApp:
         fresnel_zones_cb.grid(row=2, column=2, padx=5, pady=5, sticky="w")
         Tooltip(fresnel_zones_cb, "Consider Fresnel zones in propagation calculations.")
 
+        # Row 4: Interference pattern and heatmap centering
+        self.interference_pattern_var = tk.BooleanVar(value=False)
+        interference_pattern_cb = ttk.Checkbutton(
+            physics_grid,
+            text="Show Interference Pattern",
+            variable=self.interference_pattern_var,
+        )
+        interference_pattern_cb.grid(row=3, column=0, padx=5, pady=5, sticky="w")
+        Tooltip(interference_pattern_cb, "Show constructive/destructive interference patterns between multiple transmitters.")
+
+        self.heatmap_centering_var = tk.BooleanVar(value=False)
+        center_cb = ttk.Checkbutton(
+            physics_grid,
+            text="Center on Dead Zones",
+            variable=self.heatmap_centering_var,
+        )
+        center_cb.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+        Tooltip(center_cb, "Adjust heatmap contrast based on dead zones.")
+
         # Weather frame in physics tab
         if WeatherGUI is not None:
             self.weather_frame = ttk.LabelFrame(self.physics_tab, text="Weather Effects")
@@ -1962,7 +1986,7 @@ class RFAnalyzerApp:
             advanced_grid,
             text="Dev Overlay",
             variable=self.debug_var,
-            command=lambda: self.dev_overlay.place(x=10, y=10)
+            command=lambda: self.dev_overlay.place(x=10, rely=1.0, y=-40, anchor="sw")
             if self.debug_var.get()
             else self.dev_overlay.place_forget(),
         )
@@ -2123,442 +2147,7 @@ class RFAnalyzerApp:
         col = len(self.button_frame.grid_slaves())
         cb.grid(row=0, column=col, padx=2)
 
-        entry_frame = tk.Frame(root)
-        entry_frame.pack(pady=5)
-        self.tx_panel = TXControlPanel(entry_frame)
-        self.freq_var = self.tx_panel.tx_freq_var
-        self.power_var = self.tx_panel.tx_power_var
-        self.height_var = self.tx_panel.tx_height_var
-        tk.Label(entry_frame, text="Model").pack(side=tk.LEFT)
-        # Reuse the tab-page variable so both control generations stay live
-        # and consistent (rebinding here used to orphan the tabbed controls).
-        self.model_var = getattr(self, "model_var", None) or tk.StringVar(value="FSPL")
-        model_menu = tk.OptionMenu(
-            entry_frame, self.model_var, "FSPL", "Longwave", "Shortwave", "Cellular", "Satcom"
-        )
-        model_menu.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            model_menu,
-            "Select the RF propagation model for analysis.\n\n"
-            "MODEL OPTIONS:\n"
-            "• FSPL (Free Space Path Loss): Basic line-of-sight model, ideal for open areas\n"
-            "• Longwave: Best for low frequencies (<30 MHz), accounts for ground wave propagation\n"
-            "• Shortwave: Optimized for 3-30 MHz, includes ionospheric reflection\n"
-            "• Cellular: Designed for mobile communications (700-2600 MHz), includes urban effects\n"
-            "• Satcom: For satellite communications, accounts for atmospheric effects\n\n"
-            "TIP: Choose the model that best matches your frequency band and environment."
-        )
-        tk.Label(entry_frame, text="Param").pack(side=tk.LEFT)
-        self.param_var = getattr(self, "param_var", None) or tk.StringVar()
-        param_entry = tk.Entry(entry_frame, width=6, textvariable=self.param_var)
-        param_entry.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            param_entry,
-            "Enter an optional model parameter for advanced configuration.\n\n"
-            "PARAMETER USAGE BY MODEL:\n"
-            "• FSPL: Atmospheric attenuation factor (default: 0)\n"
-            "• Longwave: Ground conductivity (0.001-0.03, default: 0.005)\n"
-            "• Shortwave: Ionospheric reflection efficiency (0-1, default: 0.7)\n"
-            "• Cellular: Urban density factor (1-5, default: 3)\n"
-            "• Satcom: Atmospheric moisture (0-100%, default: 50)\n\n"
-            "Leave blank to use default values."
-        )
-
-        if WeatherGUI is not None:
-            self.weather_gui = WeatherGUI(entry_frame)
-        else:
-            self.weather_gui = None
-
-        tk.Label(entry_frame, text="DEM Source").pack(side=tk.LEFT)
-        self.dem_source_var = getattr(self, "dem_source_var", None) or tk.StringVar(value="Fused")
-        dem_menu = tk.OptionMenu(entry_frame, self.dem_source_var, "Fused", "MiDaS", "Physics")
-        dem_menu.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            dem_menu,
-            "Choose which Digital Elevation Model source to use for analysis. "
-            "Options depend on what data you have loaded."
-        )
-
-        self.overlay_type_var = tk.StringVar(value="danger")
-        overlay_menu = tk.OptionMenu(
-            entry_frame,
-            self.overlay_type_var,
-            "danger",
-            "propagation",
-            "wavefront",
-            "sphere",
-            "flood",
-            "global",
-        )
-        overlay_menu.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            overlay_menu,
-            "Select the type of overlay displayed on the image such as danger "
-            "zones or propagation intensity."
-        )
-
-        self.alpha_var = tk.DoubleVar(value=0.5)
-        tk.Label(entry_frame, text="Overlay Alpha").pack(side=tk.LEFT)
-        alpha_scale = tk.Scale(
-            entry_frame,
-            variable=self.alpha_var,
-            from_=0,
-            to=1,
-            resolution=0.05,
-            orient=tk.HORIZONTAL,
-            length=100,
-        )
-        alpha_scale.pack(side=tk.LEFT)
-        Tooltip(
-            alpha_scale,
-            "Adjust how transparent the overlay image appears so base imagery "
-            "remains visible underneath."
-        )
-
-        tk.Label(entry_frame, text="Brush Size").pack(side=tk.LEFT)
-        self.brush_var = tk.IntVar(value=1)
-        brush_scale = tk.Scale(entry_frame, variable=self.brush_var, from_=1, to=20, orient=tk.HORIZONTAL, length=80)
-        brush_scale.pack(side=tk.LEFT)
-        Tooltip(
-            brush_scale,
-            "Set the brush size used when painting vegetation or water masks. A "
-            "larger brush speeds up broad edits while a small brush allows detail work."
-        )
-
-        self.mode_var = tk.StringVar(value="overlay")
-        for m in ("base", "overlay", "composite", "veg", "water", "confidence", "diff", "dead"):
-            rb = tk.Radiobutton(
-                entry_frame, text=m.title(), variable=self.mode_var, value=m, command=self.refresh
-            )
-            rb.pack(side=tk.LEFT, padx=2)
-            Tooltip(rb, f"Display mode: {m}")
-
-        self.debug_var = tk.BooleanVar(value=False)
-        debug_cb = tk.Checkbutton(
-            entry_frame,
-            text="Dev Overlay",
-            variable=self.debug_var,
-            command=lambda: self.dev_overlay.place(x=10, y=10)
-            if self.debug_var.get()
-            else self.dev_overlay.place_forget(),
-        )
-        debug_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            debug_cb,
-            "Toggle live developer overlay showing frame count, memory use, layer info.\n"
-            "Useful for performance debugging and visual inspection.\nCan be enabled at runtime."
-        )
-
-        self.view_mode_selector = ttk.Combobox(
-            entry_frame,
-            values=[
-                "Standard View",
-                "Void Mapping Mode",
-                "LoS Diagnostic Mode",
-            ],
-            state="readonly",
-            width=18,
-        )
-        self.view_mode_selector.set("Standard View")
-        self.view_mode_selector.bind(
-            "<<ComboboxSelected>>", lambda _e: self._on_mode_change(self.view_mode_selector.get())
-        )
-        self.view_mode_selector.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            self.view_mode_selector,
-            "Select display mode: Standard shows the normal overlay, Void Mapping"
-            " focuses on weak zones, and LoS Diagnostics highlights lines of sight",
-        )
-
-        self.use_high_contrast = False
-        contrast_cb = tk.Checkbutton(
-            entry_frame,
-            text="High Contrast",
-            command=self._toggle_contrast,
-        )
-        contrast_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            contrast_cb,
-            "Switch to a high contrast theme to improve visibility for low-vision users."
-        )
-
-        self.theme_var = tk.BooleanVar(value=True)
-        self.theme_toggle = tk.Checkbutton(
-            entry_frame,
-            text="Dark Mode",
-            variable=self.theme_var,
-            command=lambda: self._apply_theme(self.theme_var.get()),
-        )
-        self.theme_toggle.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            self.theme_toggle,
-            "Toggle between light and dark application themes. Dark mode can reduce eye strain and helps when working in dim environments.",
-        )
         self._apply_theme(self.theme_var.get())
-
-        self.view_mode = ttk.Combobox(
-            entry_frame,
-            values=["Normal", "Side-by-Side", "Swipe"],
-            state="readonly",
-            width=12,
-        )
-        self.view_mode.set("Normal")
-        self.view_mode.bind("<<ComboboxSelected>>", self._apply_view_mode)
-        self.view_mode.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            self.view_mode,
-            "Choose how overlays are displayed: a single normal view, a side-by-side comparison, or a future swipe mode."
-        )
-
-        self.show_legend_var = tk.BooleanVar(value=True)
-        legend_cb = tk.Checkbutton(
-            entry_frame,
-            text="Show Legend",
-            variable=self.show_legend_var,
-            command=self._toggle_legend,
-        )
-        legend_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(legend_cb, "Toggle display of the color scale legend beside the overlay.")
-
-        self.voxel_toggle_var = tk.BooleanVar(value=True)
-        self.voxel_toggle = tk.Checkbutton(
-            entry_frame,
-            text="Voxel Base",
-            variable=self.voxel_toggle_var,
-            command=self._render_hybrid_view,
-        )
-        self.voxel_toggle.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            self.voxel_toggle,
-            "Display the voxelized terrain collapsed into a 2D image beneath the DEM. Disable if you only want the raw terrain view.",
-        )
-
-        self.show_overlay_var = tk.BooleanVar(value=True)
-        overlay_cb = tk.Checkbutton(
-            entry_frame,
-            text="Show Heatmap Overlay",
-            variable=self.show_overlay_var,
-            command=self._render_hybrid_view,
-        )
-        overlay_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            overlay_cb,
-            "Toggle the RF heatmap layer when viewing the voxel-based terrain rendering so you can focus on geometry alone if needed.",
-        )
-        self.heatmap_toggle = overlay_cb
-        if IS_LITE:
-            self.heatmap_toggle.config(state=tk.DISABLED)
-            self._set_status("Running in Lite Mode – Advanced overlays disabled.")
-
-        tk.Label(entry_frame, text="Overlay").pack(side=tk.LEFT)
-        self.overlay_select_var = getattr(self, "overlay_select_var", None) or tk.StringVar(value="Heatmap")
-        overlay_menu = tk.OptionMenu(
-            entry_frame,
-            self.overlay_select_var,
-            "Heatmap",
-            "LOS Zones",
-            "Interference",
-            "Reflections",
-            command=self._apply_overlay_selection,
-        )
-        overlay_menu.pack(side=tk.LEFT, padx=5)
-
-        self.passive_var = tk.BooleanVar(value=False)
-        self.passive_toggle = tk.Checkbutton(
-            entry_frame,
-            text="Passive Mode",
-            variable=self.passive_var,
-            command=lambda: self._toggle_passive_mode(self.passive_var.get()),
-        )
-        self.passive_toggle.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            self.passive_toggle,
-            "When idle, the system performs background analysis and monitoring.",
-        )
-
-        self.fresnel_var = getattr(self, "fresnel_var", None) or tk.BooleanVar(value=True)
-        fresnel_cb = tk.Checkbutton(
-            entry_frame,
-            text="Fresnel Pulse",
-            variable=self.fresnel_var,
-        )
-        fresnel_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            fresnel_cb,
-            "Animate a Fresnel zone pulse overlay during propagation replay.",
-        )
-
-        self.physics_var = getattr(self, "physics_var", None) or tk.BooleanVar(value=False)
-        physics_cb = tk.Checkbutton(
-            entry_frame,
-            text="High Physics Simulation",
-            variable=self.physics_var,
-        )
-        physics_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(
-            physics_cb,
-            "Enable advanced propagation with refraction, interference, fresnel zones, and knife edge diffraction.",
-        )
-
-        self.signal_cones_var = getattr(self, "signal_cones_var", None) or tk.BooleanVar(value=False)
-        cones_cb = tk.Checkbutton(
-            entry_frame,
-            text="Show Signal Cones",
-            variable=self.signal_cones_var,
-            command=self._render_signal_cones,
-        )
-        cones_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(cones_cb, "Render 3D directional cones for each transmitter.")
-
-        self.interference_var = tk.BooleanVar(value=False)
-        inter_cb = tk.Checkbutton(
-            entry_frame,
-            text="Multi-Tower Interference",
-            variable=self.interference_var,
-        )
-        inter_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(inter_cb, "Highlight constructive and destructive interference zones.")
-
-        self.reflection_var = tk.BooleanVar(value=False)
-        refl_cb = tk.Checkbutton(
-            entry_frame,
-            text="Terrain Reflection",
-            variable=self.reflection_var,
-        )
-        refl_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(refl_cb, "Simulate simple signal reflections off terrain.")
-
-        self.refraction_var = tk.BooleanVar(value=False)
-        refr_cb = tk.Checkbutton(
-            entry_frame,
-            text="Refraction",
-            variable=self.refraction_var,
-        )
-        refr_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(refr_cb, "Simulate signal bending through atmosphere.")
-
-        self.deflection_var = tk.BooleanVar(value=False)
-        defl_cb = tk.Checkbutton(
-            entry_frame,
-            text="Deflection",
-            variable=self.deflection_var,
-        )
-        defl_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(defl_cb, "Simulate signal deflection around obstacles.")
-
-        self.knife_edge_var = tk.BooleanVar(value=False)
-        knife_cb = tk.Checkbutton(
-            entry_frame,
-            text="Knife Edge",
-            variable=self.knife_edge_var,
-        )
-        knife_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(knife_cb, "Simulate knife edge diffraction over terrain.")
-
-        self.fresnel_zones_var = tk.BooleanVar(value=False)
-        fresnel_zones_cb = tk.Checkbutton(
-            entry_frame,
-            text="Fresnel Zones",
-            variable=self.fresnel_zones_var,
-        )
-        fresnel_zones_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(fresnel_zones_cb, "Consider Fresnel zones in propagation calculations.")
-
-        # Add interference pattern toggle
-        self.interference_pattern_var = tk.BooleanVar(value=False)
-        interference_pattern_cb = tk.Checkbutton(
-            entry_frame,
-            text="Show Interference Pattern",
-            variable=self.interference_pattern_var,
-        )
-        interference_pattern_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(interference_pattern_cb, "Show constructive/destructive interference patterns between multiple transmitters.")
-
-        self.heatmap_centering_var = tk.BooleanVar(value=False)
-        center_cb = tk.Checkbutton(
-            entry_frame,
-            text="Center on Dead Zones",
-            variable=self.heatmap_centering_var,
-        )
-        center_cb.pack(side=tk.LEFT, padx=5)
-        Tooltip(center_cb, "Adjust heatmap contrast based on dead zones.")
-
-        # Create a frame for the voxel resolution scale with percentage values
-        voxel_res_frame = tk.Frame(entry_frame)
-        voxel_res_frame.pack(side=tk.LEFT, padx=5)
-
-        tk.Label(voxel_res_frame, text="Voxel Resolution").pack(anchor=tk.W)
-
-        # Use a scale with percentage values (25%, 50%, 75%, 100%)
-        self.voxel_res_scale = tk.Scale(
-            voxel_res_frame,
-            from_=25,
-            to=100,
-            orient=tk.HORIZONTAL,
-            resolution=25,
-            command=lambda _v: self._update_voxel_params(),
-        )
-        self.voxel_res_scale.set(75)  # Default to 75% (equivalent to old default of 2)
-        self.voxel_res_scale.pack(side=tk.TOP)
-
-        # Add a tooltip explaining what the voxel resolution does
-        Tooltip(
-            voxel_res_frame, 
-            "Controls the resolution of the 3D voxel terrain model.\n"
-            "Higher values (100%) provide more detail but require more processing power.\n"
-            "Lower values (25%) are faster but less detailed."
-        )
-
-        # Create a frame for the depth perception strength scale with percentage values
-        depth_perception_frame = tk.Frame(entry_frame)
-        depth_perception_frame.pack(side=tk.LEFT, padx=5)
-
-        tk.Label(depth_perception_frame, text="Depth Perception").pack(anchor=tk.W)
-
-        # Use a scale with percentage values (25%, 50%, 75%, 100%)
-        self.depth_perception_scale = tk.Scale(
-            depth_perception_frame,
-            from_=25,
-            to=100,
-            orient=tk.HORIZONTAL,
-            resolution=25,
-            command=lambda _v: self._update_voxel_params(),
-        )
-        self.depth_perception_scale.set(100)  # Default to 100%
-        self.depth_perception_scale.pack(side=tk.TOP)
-
-        # Add a tooltip explaining what the depth perception strength does
-        Tooltip(
-            depth_perception_frame, 
-            "Controls the strength of the physics-based depth perception mechanics.\n"
-            "Higher values (100%) provide more pronounced depth effects.\n"
-            "Lower values (25%) create more subtle depth perception."
-        )
-
-        self.inference_intensity_scale = tk.Scale(
-            entry_frame,
-            from_=1,
-            to=10,
-            orient=tk.HORIZONTAL,
-            label="Inference Intensity",
-            command=lambda _v: self._update_voxel_params(),
-        )
-        self.inference_intensity_scale.set(5)
-        self.inference_intensity_scale.pack(side=tk.LEFT, padx=5)
-
-        self.slice_label = tk.Label(entry_frame, text="Layer: 0")
-        self.slice_label.pack(side=tk.LEFT, padx=5)
-
-        self.slice_slider = tk.Scale(
-            entry_frame,
-            from_=0,
-            to=15,
-            orient=tk.HORIZONTAL,
-            command=lambda _v: self._render_voxel_slice(),
-        )
-        self.slice_slider.pack(side=tk.LEFT, padx=5)
-
-        # These buttons are now created in the slice_controls_frame in the advanced tab
 
         # Create a main display area with a modern, scientific look
         self.use_canvas = True
@@ -3163,6 +2752,15 @@ class RFAnalyzerApp:
                     self.dem if self.dem is not None else infer_dem_from_shading(rgb, self.calibration)
                 )
             dem = apply_refraction(dem)
+            # Sanity-clamp inferred terrain. Shading/MiDaS DEMs from oblique or
+            # noisy imagery can carry extreme spikes (building faces read as
+            # cliffs) that drive the roughness and knife-edge terms into
+            # hundreds of dB. Clip to a robust band so terrain stays physical.
+            _dem_finite = np.isfinite(dem)
+            if _dem_finite.any():
+                _lo, _hi = np.percentile(dem[_dem_finite], [1.0, 99.0])
+                if _hi > _lo:
+                    dem = np.clip(dem, _lo, _hi).astype(dem.dtype, copy=False)
             veg = (
                 self.veg_density
                 if self.veg_density is not None
@@ -3204,8 +2802,17 @@ class RFAnalyzerApp:
                 self.loss_volume = self.data[None, :, :]
                 overlay = self.data
 
-            self.overlay_matrix = overlay
-            self.overlay_data = overlay
+            # Robust display range: clamp the on-screen copy to a percentile
+            # band so a handful of outlier cells cannot collapse the color scale
+            # into a flat wash. self.data stays physical for exports/dead-zone.
+            _disp = np.asarray(overlay, dtype="float32")
+            _fin = np.isfinite(_disp)
+            if _fin.any():
+                _dlo, _dhi = np.percentile(_disp[_fin], [2.0, 98.0])
+                if _dhi > _dlo:
+                    _disp = np.clip(_disp, _dlo, _dhi)
+            self.overlay_matrix = _disp
+            self.overlay_data = _disp
             self._update_overlay_style()
             self.overlay_visible = True
             self._update_loadbar(1.0)
@@ -3233,9 +2840,17 @@ class RFAnalyzerApp:
             materials = classify_material(rgb)
             voxels = voxelize_dem(dem)
             self.voxel_volume = voxels
-            if hasattr(material_inference, "get_voxel_permeability"):
+            if hasattr(material_inference, "voxel_permeability_3d"):
+                # Height-aware volume: air above the terrain stays transparent
+                # so the wavefront can actually propagate (a flat broadcast of
+                # the 2D ground map would mark the sky solid and block it).
+                permeability = material_inference.voxel_permeability_3d(materials, voxels)
+            elif hasattr(material_inference, "get_voxel_permeability"):
                 perm2d = material_inference.get_voxel_permeability(materials)
-                permeability = np.repeat(perm2d[None, :, :], voxels.shape[0], axis=0)
+                permeability = np.where(
+                    voxels == 0, 0.0,
+                    np.repeat(perm2d[None, :, :], voxels.shape[0], axis=0),
+                ).astype("float32")
             else:
                 permeability = None
             self.loss_volume = np.full_like(voxels, np.inf, dtype="float32")
@@ -3352,7 +2967,7 @@ class RFAnalyzerApp:
             loss_vols = self.loss_volume if self.loss_volume is not None else [self.data]
             register_all(self.dem, self.txs, loss_vols)
         except Exception:
-            pass
+            logging.warning("Overlay registration failed after analysis", exc_info=True)
         self.last_analysis_time = time.time() - start_time
         logging.debug("Analysis finished in %.2fs", self.last_analysis_time)
         gc.collect()
@@ -3635,6 +3250,8 @@ class RFAnalyzerApp:
         elif mode == "composite":
             base = self.image.convert("RGBA")
             over = self.overlay.convert("RGBA")
+            if over.size != base.size:
+                over = over.resize(base.size)
             alpha = self.alpha_var.get()
             img = Image.blend(base, over, alpha)
         elif mode == "confidence" and self.confidence_map is not None:
@@ -3647,6 +3264,8 @@ class RFAnalyzerApp:
         else:
             base = self.image.convert("RGBA")
             over = self.overlay.convert("RGBA")
+            if over.size != base.size:
+                over = over.resize(base.size)
             alpha = self.alpha_var.get()
             img = Image.blend(base, over, alpha)
         if self.active_mode == "LoS Diagnostic Mode" and self.los_overlay is not None and self.overlay_visible:
@@ -3665,6 +3284,23 @@ class RFAnalyzerApp:
             return
         self._dev_frame_counter += 1
         disp = img.copy()
+        # Scale the display copy to fit inside the canvas (preserving aspect)
+        # so large scenes are shown whole instead of being clipped at the canvas
+        # edges. disp_size/img_offset below track the scaled geometry, which
+        # keeps click-to-place-TX mapping (map_display_to_image) correct.
+        try:
+            self.canvas.update_idletasks()
+            avail_w = self.canvas.winfo_width()
+            avail_h = self.canvas.winfo_height()
+        except Exception:
+            avail_w = avail_h = 0
+        if avail_w > 1 and avail_h > 1 and disp.width > 0 and disp.height > 0:
+            fit = min(avail_w / disp.width, avail_h / disp.height)
+            if fit > 0 and abs(fit - 1.0) > 1e-3:
+                disp = disp.resize(
+                    (max(1, round(disp.width * fit)), max(1, round(disp.height * fit))),
+                    Image.LANCZOS,
+                )
         disp_w, disp_h = disp.size
         self.disp_size = (disp_w, disp_h)
         draw = ImageDraw.Draw(disp)
@@ -3708,6 +3344,19 @@ class RFAnalyzerApp:
             img_x0 = max((canvas_w - disp_w) // 2, 0)
             img_y0 = max((canvas_h - disp_h) // 2, 0)
             self.img_offset = (img_x0, img_y0)
+
+    def _resize_notebook_to_tab(self, event=None) -> None:
+        """Size the controls notebook to its active tab so short tabs (e.g.
+        File Operations) don't inherit the tallest tab's height and steal
+        vertical room from the image canvas below."""
+        try:
+            nb = self.control_notebook
+            current = nb.nametowidget(nb.select())
+            req = current.winfo_reqheight()
+            if req > 1:
+                nb.configure(height=req)
+        except Exception:
+            pass
 
     def _remove_crosshair(self) -> None:
         """Clear any crosshair currently drawn on the canvas."""
@@ -3828,6 +3477,8 @@ def main() -> None:
         enable_dev_logging()
 
     root = tk.Tk()
+    root.geometry("1400x900")
+    root.minsize(1100, 700)
     if "--dark" in sys.argv:
         apply_dark_mode(root)
     app = RFAnalyzerApp(root)
