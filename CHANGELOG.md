@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## v0.11.1 - Dependency stabilization
+
+- Closed all open Dependabot security alerts: Pillow 11.3.0 → 12.3.0
+  (multiple high-severity CVEs), pytest → 9.x, and a lock refresh that
+  picks up patched fonttools (>= 4.60.2), Pygments (>= 2.20.0), and
+  setuptools (>= 83.0.0).
+- Raised the supported Python floor from 3.10 to 3.11. Python 3.10 is
+  near end-of-life, CI tests on 3.11, and the patched transitive
+  releases above no longer ship 3.10 wheels.
+- `requirements_lock.txt` is now compiled for the 3.11 floor
+  (`uv pip compile requirements.txt -o requirements_lock.txt
+  --python-version 3.11`); the dev pin file installs on 3.11 and 3.12
+  (numpy 1.26.4).
+- Full test suite verified green under Pillow 12.3.0 / pytest 9.1.1
+  before the pins were raised.
+
 ## v0.11.0 - Engineering completion pass
 
 ### Core RF math foundation (new)
