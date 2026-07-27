@@ -123,7 +123,7 @@ psutil==5.9.8
     # via -r requirements.txt
 pyerfa==2.0.1.5
     # via astropy
-pygments==2.19.1
+pygments==2.20.0
     # via pytest
 pyinstaller==6.5.0
     # via -r requirements.txt
