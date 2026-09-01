@@ -107,7 +107,7 @@ pillow==12.3.0
     #   imageio
     #   matplotlib
     #   scikit-image
-pip==26.1.2
+pip==26.2
     # via pip-tools
 pip-tools==7.4.1
     # via -r requirements.txt
