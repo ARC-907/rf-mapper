@@ -12,7 +12,7 @@ attrs==26.1.0
     # via rasterio
 build==1.5.0
     # via pip-tools
-certifi==2026.7.22
+certifi==2026.10.18
     # via
     #   pyproj
     #   rasterio
